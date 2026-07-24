@@ -1,0 +1,22 @@
+# Dev-only overrides, auto-merged by `docker compose up`.
+# For a production-like run without these, use:
+#   docker compose -f docker-compose.yml up --build
+services:
+  backend:
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    volumes:
+      - ./backend/app:/app/app
+
+  frontend:
+    # Distinct image name so dev and prod builds never overwrite each other's tag
+    image: comprehension-agent-frontend-dev
+    build:
+      context: ./frontend
+      target: dev
+    ports: !override
+      - "5173:5173"
+    environment:
+      - BACKEND_URL=http://backend:8000
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules

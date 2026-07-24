@@ -1,0 +1,23 @@
+services:
+  backend:
+    build:
+      context: ./backend
+      target: final
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  frontend:
+    build:
+      context: ./frontend
+      target: prod
+    ports:
+      - "5173:80"
+    depends_on:
+      - backend

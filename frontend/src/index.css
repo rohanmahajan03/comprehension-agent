@@ -1,0 +1,88 @@
+:root {
+  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  line-height: 1.5;
+  color: #1a1a2e;
+  background-color: #f7f7fb;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+}
+
+.container {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 2rem 1rem;
+}
+
+h1 {
+  font-size: 1.6rem;
+}
+
+textarea {
+  width: 100%;
+  font: inherit;
+  padding: 0.75rem;
+  border: 1px solid #ccc;
+  border-radius: 8px;
+  resize: vertical;
+}
+
+button {
+  font: inherit;
+  padding: 0.5rem 1.25rem;
+  border: none;
+  border-radius: 8px;
+  background-color: #4b5bd7;
+  color: white;
+  cursor: pointer;
+}
+
+button:hover:not(:disabled) {
+  background-color: #3a48b0;
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.card {
+  background: white;
+  border: 1px solid #e3e3ee;
+  border-radius: 12px;
+  padding: 1.25rem;
+  margin: 1rem 0;
+}
+
+.error {
+  color: #b3261e;
+}
+
+.badge {
+  display: inline-block;
+  padding: 0.1rem 0.6rem;
+  border-radius: 999px;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.badge.correct {
+  background: #d9f2dd;
+  color: #146c2e;
+}
+
+.badge.incorrect {
+  background: #fbdcd9;
+  color: #a4261c;
+}
+
+.badge.diagnosing {
+  background: #fff0cc;
+  color: #7a5a00;
+}
