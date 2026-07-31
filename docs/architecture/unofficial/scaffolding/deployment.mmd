@@ -1,0 +1,21 @@
+graph TD
+    Browser
+    EnvFile[".env"]
+
+    subgraph "Dev (docker compose up, override auto-merged)"
+        ViteDev["Vite dev server :5173<br/>(Dockerfile target: dev)"]
+        UvicornReload["Uvicorn --reload :8000<br/>bind-mounted ./backend/app"]
+    end
+
+    subgraph "Prod-like (docker compose -f docker-compose.yml up)"
+        Nginx["Nginx :5173→80<br/>serves built dist/ (target: prod)"]
+        FastAPIProd["FastAPI :8000<br/>(Dockerfile target: final)"]
+    end
+
+    Browser --> ViteDev
+    ViteDev -->|"proxy /api via BACKEND_URL"| UvicornReload
+    EnvFile -->|"env_file"| UvicornReload
+
+    Browser --> Nginx
+    Nginx -->|"proxy /api (nginx.conf)"| FastAPIProd
+    EnvFile -->|"env_file"| FastAPIProd

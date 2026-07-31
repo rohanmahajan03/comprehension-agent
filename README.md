@@ -12,14 +12,14 @@ Upload textbook chapter → build dependency graph (extract concepts and prerequ
 
 Implemented as: `POST /api/textbook` → `services/graph_builder.py` → `services/question_generator.py`, all synchronous for now.
 
-### Pipeline 2 — Question/answer diagnostic loop (runs per session)
+### Pipeline 2 — Question/answer diagnostic loop (runs per study session)
 
 Ask a question targeting a concept → evaluate the answer.
 
 - **Correct** → advance to the next concept (in prerequisite order) and loop back to asking.
 - **Incorrect** → check the concept's dependencies → diagnose the suspected gap → ask a targeted question probing that prerequisite → loop back to evaluation, potentially recursing into deeper dependencies until the root gap is found.
 
-Implemented as: `POST /api/session/{id}/answer` → `services/evaluator.py`, and on a wrong answer `services/diagnoser.py`.
+Implemented as: `POST /api/study-session/{id}/answer` → `services/evaluator.py`, and on a wrong answer `services/diagnoser.py`.
 
 ## Prerequisites
 
@@ -78,9 +78,9 @@ cd backend
 | `POST` | `/api/textbook` | Upload chapter text; builds graph + questions, returns `doc_id` |
 | `GET` | `/api/graph/{doc_id}` | The chapter's concept dependency graph |
 | `GET` | `/api/questions/{concept_id}` | Generated question set for a concept |
-| `POST` | `/api/session/start` | Start a tutoring session for a `doc_id` |
-| `GET` | `/api/session/{session_id}` | Fetch session state |
-| `POST` | `/api/session/{session_id}/answer` | Submit an answer; returns evaluation, optional diagnosis, next question |
+| `POST` | `/api/study-session/start` | Start a tutoring study session for a `doc_id` |
+| `GET` | `/api/study-session/{study_session_id}` | Fetch study session state |
+| `POST` | `/api/study-session/{study_session_id}/answer` | Submit an answer; returns evaluation, optional diagnosis, next question |
 | `GET` | `/api/health` | Liveness check |
 
 ## Where the real logic goes

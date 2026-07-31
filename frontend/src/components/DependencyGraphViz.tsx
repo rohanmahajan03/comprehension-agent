@@ -54,12 +54,15 @@ function layout(graph: DependencyGraph): Map<string, NodePosition> {
 
 export function DependencyGraphViz({ graph, selectedId, onSelect }: Props) {
   const positions = layout(graph)
+  // Trailing `0` keeps Math.max from returning -Infinity when the graph is empty.
   const width =
     Math.max(...[...positions.values()].map((p) => p.x + NODE_WIDTH), 0) + PADDING
   const height =
     Math.max(...[...positions.values()].map((p) => p.y + NODE_HEIGHT), 0) + PADDING
 
   return (
+    // viewBox is sized to the content (not a fixed constant) so the graph scales
+    // to fit its container regardless of how many concepts/columns it has.
     <svg width="100%" viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Concept dependency graph">
       <defs>
         <marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">

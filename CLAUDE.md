@@ -30,18 +30,18 @@ npm run build                                # tsc -b && vite build
 Two pipelines, both stubbed in `backend/app/services/` (each stub has a `# TODO:` describing the real LLM logic that replaces it):
 
 1. **Pre-questioning** (per uploaded chapter): `POST /api/textbook` → `graph_builder.build_graph()` → `question_generator.generate_questions()` per concept, all synchronous, results saved to the store.
-2. **Diagnostic loop** (per session): `POST /api/session/{id}/answer` → `evaluator.evaluate()`. Correct → advance `current_concept_id` in topological order. Incorrect → `diagnoser.diagnose()` returns a targeted question probing a prerequisite; session status becomes `diagnosing`.
+2. **Diagnostic loop** (per study session): `POST /api/study-session/{id}/answer` → `evaluator.evaluate()`. Correct → advance `current_concept_id` in topological order. Incorrect → `diagnoser.diagnose()` returns a targeted question probing a prerequisite; study session status becomes `diagnosing`.
 
 Key seams:
 
 - **Storage**: `backend/app/store/memory_store.py` — abstract `Store` class + `InMemoryStore` + `get_store()` factory (lru_cache singleton). Swapping in Postgres = new subclass + change `get_store()`.
-- **Models**: `backend/app/models/schemas.py` is the source of truth; `frontend/src/types/index.ts` mirrors it **by hand — keep them in sync** (includes `AnswerResponse`, the answer-endpoint envelope).
-- **ID conventions (load-bearing)**: concept ids are `{doc_id}:{slug}`, question ids are `{concept_id}:{suffix}` (`q1`, `q2`, `diagnostic`). The session router resolves an answered question by `question_id.rsplit(":", 1)[0]` → concept's question set. Diagnostic questions are appended to the store's question set for their concept when generated, so answers to them resolve too.
+- **Models**: `backend/app/models/schemas.py` is the source of truth; `frontend/src/types/index.ts` mirrors it **by hand — keep them in sync** (includes `AnswerResponse`, the answer-endpoint envelope). The study-session domain model is named `StudySession`/`StudySessionStatus` (not `Session`) specifically so it won't collide with a future DB session object (e.g. SQLAlchemy's `Session`) once Postgres is wired in.
+- **ID conventions (load-bearing)**: concept ids are `{doc_id}:{slug}`, question ids are `{concept_id}:{suffix}` (`q1`, `q2`, `diagnostic`). The study-session router (`routers/study_session.py`) resolves an answered question by `question_id.rsplit(":", 1)[0]` → concept's question set. Diagnostic questions are appended to the store's question set for their concept when generated, so answers to them resolve too.
 - Concept ordering uses `graphlib.TopologicalSorter` (`graph_builder.topological_order`).
 
 ## Stub behavior (intentional, don't "fix")
 
-- `evaluator.py` alternates correct/incorrect via a **global** module-level counter — not per-session, ignores answer text. Exists so the UI exercises both branches.
+- `evaluator.py` alternates correct/incorrect via a **global** module-level counter — not per-study-session, ignores answer text. Exists so the UI exercises both branches.
 - `graph_builder.py` ignores the uploaded text and always returns the same 5-concept calculus graph.
 - `diagnoser.py` always picks the concept's **first** `depends_on` entry (or the concept itself if none). Targeted-question prompts must not embed `suspect.summary` (it leaks the answer); the summary belongs in `expected_answer_notes`.
 

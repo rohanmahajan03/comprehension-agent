@@ -1,8 +1,11 @@
 import { useState } from 'react'
 import { GraphView } from './pages/GraphView'
-import { SessionPage } from './pages/SessionPage'
+import { StudySessionPage } from './pages/StudySessionPage'
 import { UploadPage } from './pages/UploadPage'
 
+// Plain state instead of a router: only three steps, always visited in this
+// order, and no page needs a shareable URL — a router would add ceremony
+// without buying anything yet.
 type Page = 'upload' | 'graph' | 'session'
 
 export default function App() {
@@ -21,10 +24,10 @@ export default function App() {
         />
       )}
       {page === 'graph' && docId && (
-        <GraphView docId={docId} onStartSession={() => setPage('session')} />
+        <GraphView docId={docId} onStartStudySession={() => setPage('session')} />
       )}
       {page === 'session' && docId && (
-        <SessionPage docId={docId} onExit={() => setPage('graph')} />
+        <StudySessionPage docId={docId} onExit={() => setPage('graph')} />
       )}
     </div>
   )

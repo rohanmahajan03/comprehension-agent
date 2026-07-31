@@ -35,7 +35,7 @@ export interface DiagnosisResult {
   targeted_question: Question
 }
 
-export type SessionStatus = 'active' | 'diagnosing' | 'completed'
+export type StudySessionStatus = 'active' | 'diagnosing' | 'completed'
 
 export interface HistoryEntry {
   question: Question
@@ -44,18 +44,18 @@ export interface HistoryEntry {
   diagnosis: DiagnosisResult | null
 }
 
-export interface Session {
+export interface StudySession {
   id: string
   doc_id: string
   current_concept_id: string | null
   history: HistoryEntry[]
-  status: SessionStatus
+  status: StudySessionStatus
 }
 
-// Response of POST /api/session/{id}/answer
+// Response of POST /api/study-session/{id}/answer
 export interface AnswerResponse {
   evaluation: EvaluationResult
   diagnosis: DiagnosisResult | null
   next_question: Question | null
-  session: Session
+  study_session: StudySession
 }

@@ -6,8 +6,8 @@ from app.models.schemas import (
     EvaluationResult,
     HistoryEntry,
     Question,
-    Session,
-    SessionStatus,
+    StudySession,
+    StudySessionStatus,
 )
 
 __all__ = [
@@ -18,6 +18,6 @@ __all__ = [
     "EvaluationResult",
     "HistoryEntry",
     "Question",
-    "Session",
-    "SessionStatus",
+    "StudySession",
+    "StudySessionStatus",
 ]

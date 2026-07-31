@@ -11,17 +11,17 @@ from app.models import (
     EvaluationResult,
     HistoryEntry,
     Question,
-    Session,
-    SessionStatus,
+    StudySession,
+    StudySessionStatus,
 )
 from app.services import diagnoser, evaluator
 from app.services.graph_builder import topological_order
 from app.store import Store, get_store
 
-router = APIRouter(prefix="/api/session", tags=["session"])
+router = APIRouter(prefix="/api/study-session", tags=["study-session"])
 
 
-class SessionStartRequest(BaseModel):
+class StudySessionStartRequest(BaseModel):
     doc_id: str
 
 
@@ -29,32 +29,32 @@ class AnswerResponse(BaseModel):
     evaluation: EvaluationResult
     diagnosis: DiagnosisResult | None = None
     next_question: Question | None = None
-    session: Session
+    study_session: StudySession
 
 
-@router.post("/start", response_model=Session, status_code=201)
-def start_session(payload: SessionStartRequest) -> Session:
+@router.post("/start", response_model=StudySession, status_code=201)
+def start_study_session(payload: StudySessionStartRequest) -> StudySession:
     store = get_store()
     graph = store.get_graph(payload.doc_id)
     if graph is None:
         raise HTTPException(status_code=404, detail=f"No graph found for doc '{payload.doc_id}'")
 
     ordered = topological_order(graph)
-    session = Session(
+    study_session = StudySession(
         id=uuid.uuid4().hex[:12],
         doc_id=payload.doc_id,
         current_concept_id=ordered[0].id if ordered else None,
     )
-    store.save_session(session)
-    return session
+    store.save_study_session(study_session)
+    return study_session
 
 
-@router.get("/{session_id}", response_model=Session)
-def get_session(session_id: str) -> Session:
-    session = get_store().get_session(session_id)
-    if session is None:
-        raise HTTPException(status_code=404, detail=f"No session '{session_id}'")
-    return session
+@router.get("/{study_session_id}", response_model=StudySession)
+def get_study_session(study_session_id: str) -> StudySession:
+    study_session = get_store().get_study_session(study_session_id)
+    if study_session is None:
+        raise HTTPException(status_code=404, detail=f"No study session '{study_session_id}'")
+    return study_session
 
 
 def _find_question(store: Store, question_id: str) -> Question | None:
@@ -66,18 +66,18 @@ def _find_question(store: Store, question_id: str) -> Question | None:
     return None
 
 
-@router.post("/{session_id}/answer", response_model=AnswerResponse)
-def submit_answer(session_id: str, answer: Answer) -> AnswerResponse:
+@router.post("/{study_session_id}/answer", response_model=AnswerResponse)
+def submit_answer(study_session_id: str, answer: Answer) -> AnswerResponse:
     store = get_store()
-    session = store.get_session(session_id)
-    if session is None:
-        raise HTTPException(status_code=404, detail=f"No session '{session_id}'")
-    if session.status == SessionStatus.COMPLETED:
-        raise HTTPException(status_code=409, detail="Session is already completed")
+    study_session = store.get_study_session(study_session_id)
+    if study_session is None:
+        raise HTTPException(status_code=404, detail=f"No study session '{study_session_id}'")
+    if study_session.status == StudySessionStatus.COMPLETED:
+        raise HTTPException(status_code=409, detail="Study session is already completed")
 
-    graph = store.get_graph(session.doc_id)
+    graph = store.get_graph(study_session.doc_id)
     if graph is None:
-        raise HTTPException(status_code=404, detail=f"No graph found for doc '{session.doc_id}'")
+        raise HTTPException(status_code=404, detail=f"No graph found for doc '{study_session.doc_id}'")
     by_id = {c.id: c for c in graph.concepts}
 
     question = _find_question(store, answer.question_id)
@@ -91,17 +91,17 @@ def submit_answer(session_id: str, answer: Answer) -> AnswerResponse:
     if evaluation.correct:
         # Advance to the next unvisited concept in prerequisite order. If the
         # learner was answering a diagnostic question, this simply resumes the
-        # main track from the session's current concept.
+        # main track from the study session's current concept.
         ordered = topological_order(graph)
         current_index = next(
-            (i for i, c in enumerate(ordered) if c.id == session.current_concept_id), -1
+            (i for i, c in enumerate(ordered) if c.id == study_session.current_concept_id), -1
         )
         if current_index + 1 < len(ordered):
-            session.current_concept_id = ordered[current_index + 1].id
-            session.status = SessionStatus.ACTIVE
-            next_question = (store.get_questions(session.current_concept_id) or [None])[0]
+            study_session.current_concept_id = ordered[current_index + 1].id
+            study_session.status = StudySessionStatus.ACTIVE
+            next_question = (store.get_questions(study_session.current_concept_id) or [None])[0]
         else:
-            session.status = SessionStatus.COMPLETED
+            study_session.status = StudySessionStatus.COMPLETED
     else:
         concept = by_id.get(question.concept_id)
         if concept is None:
@@ -114,17 +114,17 @@ def submit_answer(session_id: str, answer: Answer) -> AnswerResponse:
         existing = store.get_questions(targeted.concept_id) or []
         if all(q.id != targeted.id for q in existing):
             store.save_questions(targeted.concept_id, [*existing, targeted])
-        session.status = SessionStatus.DIAGNOSING
+        study_session.status = StudySessionStatus.DIAGNOSING
         next_question = targeted
 
-    session.history.append(
+    study_session.history.append(
         HistoryEntry(question=question, answer=answer, evaluation=evaluation, diagnosis=diagnosis)
     )
-    store.save_session(session)
+    store.save_study_session(study_session)
 
     return AnswerResponse(
         evaluation=evaluation,
         diagnosis=diagnosis,
         next_question=next_question,
-        session=session,
+        study_session=study_session,
     )

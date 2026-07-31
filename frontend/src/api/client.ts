@@ -3,7 +3,7 @@ import type {
   AnswerResponse,
   DependencyGraph,
   Question,
-  Session,
+  StudySession,
 } from '../types'
 
 // Same-origin by default; vite's dev server proxies /api to the backend.
@@ -36,15 +36,15 @@ export function getQuestions(conceptId: string): Promise<Question[]> {
   return request(`/api/questions/${encodeURIComponent(conceptId)}`)
 }
 
-export function startSession(docId: string): Promise<Session> {
-  return request('/api/session/start', {
+export function startStudySession(docId: string): Promise<StudySession> {
+  return request('/api/study-session/start', {
     method: 'POST',
     body: JSON.stringify({ doc_id: docId }),
   })
 }
 
-export function submitAnswer(sessionId: string, answer: Answer): Promise<AnswerResponse> {
-  return request(`/api/session/${encodeURIComponent(sessionId)}/answer`, {
+export function submitAnswer(studySessionId: string, answer: Answer): Promise<AnswerResponse> {
+  return request(`/api/study-session/${encodeURIComponent(studySessionId)}/answer`, {
     method: 'POST',
     body: JSON.stringify(answer),
   })

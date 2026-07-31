@@ -12,6 +12,9 @@ export function QuestionCard({ question, onSubmit, submitting }: Props) {
 
   const submit = async () => {
     await onSubmit(text)
+    // Belt-and-suspenders reset: the parent normally remounts this component
+    // (via a changing `key`) once the next question arrives, but this keeps
+    // the field clean even if it doesn't.
     setText('')
   }
 

@@ -8,7 +8,7 @@ subclass and changing `get_store()` — nothing else should need to change.
 from abc import ABC, abstractmethod
 from functools import lru_cache
 
-from app.models import DependencyGraph, Question, Session
+from app.models import DependencyGraph, Question, StudySession
 
 
 class Store(ABC):
@@ -33,12 +33,12 @@ class Store(ABC):
     @abstractmethod
     def get_questions(self, concept_id: str) -> list[Question] | None: ...
 
-    # --- sessions ---
+    # --- study sessions ---
     @abstractmethod
-    def save_session(self, session: Session) -> None: ...
+    def save_study_session(self, study_session: StudySession) -> None: ...
 
     @abstractmethod
-    def get_session(self, session_id: str) -> Session | None: ...
+    def get_study_session(self, study_session_id: str) -> StudySession | None: ...
 
 
 class InMemoryStore(Store):
@@ -46,7 +46,7 @@ class InMemoryStore(Store):
         self._documents: dict[str, str] = {}
         self._graphs: dict[str, DependencyGraph] = {}
         self._questions: dict[str, list[Question]] = {}
-        self._sessions: dict[str, Session] = {}
+        self._study_sessions: dict[str, StudySession] = {}
 
     def save_document(self, doc_id: str, text: str) -> None:
         self._documents[doc_id] = text
@@ -66,11 +66,11 @@ class InMemoryStore(Store):
     def get_questions(self, concept_id: str) -> list[Question] | None:
         return self._questions.get(concept_id)
 
-    def save_session(self, session: Session) -> None:
-        self._sessions[session.id] = session
+    def save_study_session(self, study_session: StudySession) -> None:
+        self._study_sessions[study_session.id] = study_session
 
-    def get_session(self, session_id: str) -> Session | None:
-        return self._sessions.get(session_id)
+    def get_study_session(self, study_session_id: str) -> StudySession | None:
+        return self._study_sessions.get(study_session_id)
 
 
 @lru_cache

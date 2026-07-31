@@ -45,7 +45,7 @@ class DiagnosisResult(BaseModel):
     targeted_question: Question
 
 
-class SessionStatus(str, Enum):
+class StudySessionStatus(str, Enum):
     ACTIVE = "active"
     DIAGNOSING = "diagnosing"
     COMPLETED = "completed"
@@ -58,9 +58,9 @@ class HistoryEntry(BaseModel):
     diagnosis: DiagnosisResult | None = None
 
 
-class Session(BaseModel):
+class StudySession(BaseModel):
     id: str
     doc_id: str
     current_concept_id: str | None = None
     history: list[HistoryEntry] = Field(default_factory=list)
-    status: SessionStatus = SessionStatus.ACTIVE
+    status: StudySessionStatus = StudySessionStatus.ACTIVE

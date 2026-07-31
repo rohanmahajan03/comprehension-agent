@@ -5,10 +5,10 @@ import type { Concept, DependencyGraph, Question } from '../types'
 
 interface Props {
   docId: string
-  onStartSession: () => void
+  onStartStudySession: () => void
 }
 
-export function GraphView({ docId, onStartSession }: Props) {
+export function GraphView({ docId, onStartStudySession }: Props) {
   const [graph, setGraph] = useState<DependencyGraph | null>(null)
   const [selected, setSelected] = useState<Concept | null>(null)
   const [questions, setQuestions] = useState<Question[] | null>(null)
@@ -19,6 +19,8 @@ export function GraphView({ docId, onStartSession }: Props) {
   }, [docId])
 
   useEffect(() => {
+    // Clear before fetching so switching concepts shows "Loading…" instead of
+    // briefly flashing the previously-selected concept's questions.
     setQuestions(null)
     if (!selected) return
     getQuestions(selected.id)
@@ -39,7 +41,7 @@ export function GraphView({ docId, onStartSession }: Props) {
         </p>
         <DependencyGraphViz graph={graph} selectedId={selected?.id} onSelect={setSelected} />
         <p>
-          <button onClick={onStartSession}>Start tutoring session</button>
+          <button onClick={onStartStudySession}>Start tutoring session</button>
         </p>
       </div>
       {selected && (
