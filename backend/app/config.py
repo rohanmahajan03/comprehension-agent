@@ -9,6 +9,7 @@ class Settings(BaseSettings):
     app_name: str = "Adaptive Concept Tutor"
     debug: bool = False
     cors_origins: str = "http://localhost:5173"
+    llm_api_key: str = ""
 
     @property
     def cors_origin_list(self) -> list[str]:

@@ -23,7 +23,7 @@ class DependencyGraph(BaseModel):
 class Question(BaseModel):
     id: str
     concept_id: str
-    prompt: str
+    prompt: str # the question that was asked
     expected_answer_notes: str = Field(
         description="Notes for the evaluator on what a correct answer should contain"
     )
