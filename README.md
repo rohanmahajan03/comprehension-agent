@@ -21,6 +21,10 @@ Ask a question targeting a concept → evaluate the answer.
 
 Implemented as: `POST /api/study-session/{id}/answer` → `services/evaluator.py`, and on a wrong answer `services/diagnoser.py`.
 
+### ID conventions (load-bearing)
+
+Concept ids are `{doc_id}:{slug}`; question ids are `{concept_id}:{suffix}` (`q1`, `q2`, `diagnostic`). The study-session router resolves an answered question by stripping the id back to its concept (`question_id.rsplit(":", 1)[0]`) and looking it up in that concept's question set — diagnostic questions get appended to the store under their concept when generated so this resolution keeps working for them too.
+
 ## Prerequisites
 
 - Docker + Docker Compose (that's all for the containerized quickstart)
