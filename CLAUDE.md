@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-Adaptive concept tutor: ingests textbook chapters, builds a concept dependency graph, and runs a Q&A loop that traces wrong answers back to the prerequisite concept at fault. Currently an infrastructure skeleton — all tutoring/LLM logic is stubbed.
+Adaptive concept tutor: ingests textbook chapters, builds a concept dependency graph, and runs a Q&A loop that traces wrong answers back to the prerequisite concept at fault. `evaluator.py` (pipeline 2, step 2) now makes real LLM calls; `graph_builder.py`, `question_generator.py`, and `diagnoser.py` are still stubbed.
 
 ## Commands
 
@@ -17,8 +17,11 @@ cd backend && python3 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"       # uv works too: uv sync --extra dev
 uvicorn app.main:app --reload
 
-# Backend tests
+# Backend tests (free — evaluator is stubbed via tests/conftest.py, geval suite auto-skips)
 cd backend && .venv/bin/pytest
+
+# G-Eval regression suite for evaluator.py (real, billed Anthropic API calls — see Testing below)
+cd backend && set -a && source ../.env && set +a && .venv/bin/pytest tests/geval -v
 
 # Frontend natively
 cd frontend && npm install && npm run dev   # proxies /api to :8000
@@ -27,10 +30,12 @@ npm run build                                # tsc -b && vite build
 
 ## Architecture
 
-Two pipelines, both stubbed in `backend/app/services/` (each stub has a `# TODO:` describing the real LLM logic that replaces it):
+Two pipelines in `backend/app/services/`:
 
-1. **Pre-questioning** (per uploaded chapter): `POST /api/textbook` → `graph_builder.build_graph()` → `question_generator.generate_questions()` per concept, all synchronous, results saved to the store.
-2. **Diagnostic loop** (per study session): `POST /api/study-session/{id}/answer` → `evaluator.evaluate()`. Correct → advance `current_concept_id` in topological order. Incorrect → `diagnoser.diagnose()` returns a targeted question probing a prerequisite; study session status becomes `diagnosing`.
+1. **Pre-questioning** (per uploaded chapter): `POST /api/textbook` → `graph_builder.build_graph()` → `question_generator.generate_questions()` per concept, all synchronous, results saved to the store. Still stubbed (`# TODO:` describes the real LLM logic).
+2. **Diagnostic loop** (per study session): `POST /api/study-session/{id}/answer` → `evaluator.evaluate()`. Correct → advance `current_concept_id` in topological order. Incorrect → `diagnoser.diagnose()` returns a targeted question probing a prerequisite; study session status becomes `diagnosing`. `evaluator.evaluate()` is real (`diagnoser.py` is still stubbed).
+
+`evaluator.py` calls `claude-haiku-4-5` via the Anthropic SDK with a JSON-schema-constrained response (`_OUTPUT_SCHEMA`) grading the student's answer against `question.expected_answer_notes`. It's the template to follow when de-stubbing the other three services. Known issue: the `temperature=0` call parameter is currently commented out, which means grading is **not deterministic** — the same question/answer pair can flip between `correct: true/false` across calls. Re-enabling it is recommended; the `tests/geval` suite (see Testing below) is what surfaced this.
 
 Key seams:
 
@@ -41,9 +46,21 @@ Key seams:
 
 ## Stub behavior (intentional, don't "fix")
 
-- `evaluator.py` alternates correct/incorrect via a **global** module-level counter — not per-study-session, ignores answer text. Exists so the UI exercises both branches.
 - `graph_builder.py` ignores the uploaded text and always returns the same 5-concept calculus graph.
+- `question_generator.py` ignores the source chapter text and returns two templated questions per concept ("explain X" / "give an example of X").
 - `diagnoser.py` always picks the concept's **first** `depends_on` entry (or the concept itself if none). Targeted-question prompts must not embed `suspect.summary` (it leaks the answer); the summary belongs in `expected_answer_notes`.
+
+`evaluator.py` is no longer part of this list — it makes real LLM calls (see Architecture above). `tests/conftest.py` still stubs it (alternating correct/incorrect via a global counter) for the rest of the test suite, so `test_flow.py` and friends stay free and deterministic.
+
+## Testing
+
+- **Stub-backed tests** (`backend/tests/test_flow.py`, `test_health.py`): free, fast, no API key needed. `tests/conftest.py` monkeypatches `evaluator.evaluate` with an alternating-correct/incorrect stub (autouse fixture) so these never hit the real API.
+- **`backend/tests/geval/`** — a G-Eval regression suite (via [DeepEval](https://github.com/confident-ai/deepeval)) that runs the *real* `evaluator.evaluate()` against the 10 questions/42 answer variants in `tests/geval_test_suite.md`, then scores the evaluator's explanation against the golden answer using a `GEval` metric judged by a separate model (`claude-opus-4-5`, deliberately different/stronger than the `claude-haiku-4-5` evaluator under test, to avoid a model grading its own homework).
+  - Organized one file per chapter (`test_ch1.py`…`test_ch8.py`), one test function per question/answer-variant pair.
+  - `criteria.py` holds each question's G-Eval `criteria` (copied from the markdown) and `evaluation_steps`, hand-derived and **hardcoded** — GEval would otherwise regenerate steps via an LLM call on every run, making the rubric non-deterministic across runs. If a question's criterion changes, regenerate its steps by hand and update `criteria.py`; don't let evaluation_steps go unset.
+  - `tests/geval/conftest.py` overrides the parent `stub_evaluator` fixture as a no-op (real calls needed) and skips the whole directory if `LLM_API_KEY` is unset, so CI (which has no key) stays green.
+  - **Makes real, billed Anthropic API calls** — roughly $0.35–0.45 and 5-6 minutes for a full run (Opus judge calls dominate cost). Don't run this suite reflexively; it's for validating changes to `evaluator.py`'s prompt/model.
+  - As of the last full run: 39/42 passing. The 3 known failures are real evaluator leniency gaps (not suite bugs) — see git history around the `evaluator implementation done` / `g-eval test suite` commits for details.
 
 ## Docker gotchas
 
@@ -53,4 +70,4 @@ Key seams:
 
 ## Not built yet (deliberate)
 
-No real LLM calls, no persistent DB, no auth. CI (`.github/workflows/ci.yml`) only runs backend pytest + frontend build.
+No persistent DB, no auth. Concept extraction, question generation, and gap diagnosis (`graph_builder.py`, `question_generator.py`, `diagnoser.py`) are still stubbed — only answer grading (`evaluator.py`) makes real LLM calls so far. CI (`.github/workflows/ci.yml`) only runs backend pytest (stub-backed tests; `tests/geval` auto-skips without `LLM_API_KEY`) + frontend build — it does not run the live G-Eval suite.

@@ -2,7 +2,7 @@
 
 Diagnosing EXACTLY what you don't understand from your reading — an adaptive tutor that ingests textbook chapters, builds a concept dependency graph, and runs a question/answer loop that traces wrong answers back to the prerequisite concept actually at fault.
 
-**Current state:** full infrastructure skeleton. All LLM/tutoring logic is stubbed with mock implementations (marked with `# TODO:` in `backend/app/services/`) that return plausible sample data, so the app runs end-to-end out of the box.
+**Current state:** infrastructure skeleton with the first real LLM call wired in. Answer grading (`evaluator.py`) calls Claude for real; concept extraction, question generation, and gap diagnosis are still stubbed with mock implementations (marked with `# TODO:` in `backend/app/services/`) that return plausible sample data, so the app runs end-to-end out of the box either way.
 
 ## How it works
 
@@ -19,7 +19,7 @@ Ask a question targeting a concept → evaluate the answer.
 - **Correct** → advance to the next concept (in prerequisite order) and loop back to asking.
 - **Incorrect** → check the concept's dependencies → diagnose the suspected gap → ask a targeted question probing that prerequisite → loop back to evaluation, potentially recursing into deeper dependencies until the root gap is found.
 
-Implemented as: `POST /api/study-session/{id}/answer` → `services/evaluator.py`, and on a wrong answer `services/diagnoser.py`.
+Implemented as: `POST /api/study-session/{id}/answer` → `services/evaluator.py`, and on a wrong answer `services/diagnoser.py`. Answer grading is real: `evaluator.py` calls Claude (`claude-haiku-4-5`) to check the student's answer against the question's rubric and return a structured `{correct, explanation}` — this needs a valid `LLM_API_KEY` in `.env` (see Prerequisites). `diagnoser.py`'s prerequisite-walking is still stubbed.
 
 ### ID conventions (load-bearing)
 
@@ -29,6 +29,7 @@ Concept ids are `{doc_id}:{slug}`; question ids are `{concept_id}:{suffix}` (`q1
 
 - Docker + Docker Compose (that's all for the containerized quickstart)
 - For native development: Python ≥ 3.11 and Node ≥ 20
+- An Anthropic API key in `.env` as `LLM_API_KEY` — needed to submit answers in a study session (`evaluator.py` makes a real call). Uploading a chapter and browsing the generated graph/questions works without one, since those pipelines are still stubbed.
 
 ## Quickstart (Docker)
 
@@ -75,6 +76,16 @@ cd backend
 .venv/bin/pytest                 # or just `pytest` with the venv activated
 ```
 
+Free and deterministic — `evaluator.py` is stubbed for these via an autouse fixture in `tests/conftest.py`.
+
+There's also a live G-Eval regression suite for the real evaluator at `backend/tests/geval/` (uses [DeepEval](https://github.com/confident-ai/deepeval)), which grades `evaluator.evaluate()`'s output against 10 questions / 42 answer variants. It makes real, **billed** Anthropic API calls (roughly $0.35–0.45, ~5-6 minutes per full run), so it's not part of the default `pytest` run — it auto-skips without an `LLM_API_KEY`. To run it:
+
+```bash
+cd backend
+set -a && source ../.env && set +a
+.venv/bin/pytest tests/geval -v
+```
+
 ## API surface
 
 | Method | Path | Description |
@@ -89,11 +100,10 @@ cd backend
 
 ## Where the real logic goes
 
-Every stub is a single function with a `# TODO:` describing what replaces it:
+`backend/app/services/evaluator.py` — answer grading — is done: it calls Claude (`claude-haiku-4-5`) with a JSON-schema-constrained response to check the student's answer against the rubric. It's the template to follow for the rest. Everything else is still a stub, a single function with a `# TODO:` describing what replaces it:
 
 - `backend/app/services/graph_builder.py` — concept extraction + dependency inference from chapter text
 - `backend/app/services/question_generator.py` — per-concept question generation
-- `backend/app/services/evaluator.py` — answer grading (currently alternates correct/incorrect so the UI exercises both branches)
 - `backend/app/services/diagnoser.py` — prerequisite-walking gap diagnosis + targeted question generation
 
 Storage is in-memory (`backend/app/store/memory_store.py`) behind the `Store` abstract class — swapping in Postgres later means adding a subclass and changing `get_store()`.
