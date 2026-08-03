@@ -56,6 +56,7 @@ def evaluate(question: Question, answer: Answer) -> EvaluationResult:
     response = _client().messages.create(
         model=_MODEL,
         max_tokens=1024,
+        #temperature=0,
         system=_SYSTEM_PROMPT,
         messages=[{"role": "user", "content": prompt}],
         output_config={"format": _OUTPUT_SCHEMA},
