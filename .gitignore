@@ -11,5 +11,9 @@ dist/
 # Env
 .env
 
+# deepeval (backend/tests/geval regression suite)
+.deepeval/
+.deepeval_telemetry.txt
+
 # Misc
 .DS_Store

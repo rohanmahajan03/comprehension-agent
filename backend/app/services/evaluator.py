@@ -1,35 +1,66 @@
 """Answer evaluation (pipeline 2, step 2)."""
 
-from itertools import count
+import json
+from functools import lru_cache
 
+import anthropic
+
+from app.config import get_settings
 from app.models import Answer, EvaluationResult, Question
 
-# Alternates correct/incorrect so the demo flow exercises both branches deterministically.
-_call_counter = count()
+_MODEL = "claude-haiku-4-5"
+
+_SYSTEM_PROMPT = """You are an answer evaluator for an adaptive tutoring system.
+
+You will be given a question, rubric notes describing what a correct answer should contain, and a student's answer.
+
+Your job:
+1. Determine whether the student's answer is correct
+2. If incorrect or incomplete, identify specifically which elements required by the rubric are missing or wrong — stay close to the rubric, do not interpret or diagnose why
+
+Return your response as JSON matching this schema:
+{
+  "correct": bool,
+  "explanation": string
+}
+
+If correct, explanation should briefly confirm which rubric elements were satisfied.
+If incorrect, explanation should list precisely which rubric elements were absent or wrong. Do not speculate about the student's understanding — that is handled downstream."""
+
+_OUTPUT_SCHEMA = {
+    "type": "json_schema",
+    "schema": {
+        "type": "object",
+        "properties": {
+            "correct": {"type": "boolean"},
+            "explanation": {"type": "string"},
+        },
+        "required": ["correct", "explanation"],
+        "additionalProperties": False,
+    },
+}
+
+
+@lru_cache
+def _client() -> anthropic.Anthropic:
+    return anthropic.Anthropic(api_key=get_settings().llm_api_key)
 
 
 def evaluate(question: Question, answer: Answer) -> EvaluationResult:
-    """Grade `answer` against `question`, returning right/wrong and why.
-
-    # TODO: Replace with real logic — call an LLM with the question prompt, the
-    # expected_answer_notes, and the learner's answer text; return whether the
-    # answer demonstrates understanding and a short explanation of what was
-    # right or missing. The stub below just alternates correct/incorrect on each
-    # call so the UI exercises both the "advance" and "diagnose" branches.
-    """
-    correct = next(_call_counter) % 2 == 0
-    if correct:
-        return EvaluationResult(
-            correct=True,
-            explanation=(
-                "[stub] Marked correct: your answer touches the key idea in the "
-                f"expected notes ({question.expected_answer_notes[:80]}…)."
-            ),
-        )
-    return EvaluationResult(
-        correct=False,
-        explanation=(
-            "[stub] Marked incorrect: your answer appears to miss the key idea in the "
-            f"expected notes ({question.expected_answer_notes[:80]}…)."
-        ),
+    """Grade `answer` against `question` by asking Claude to check it against the rubric."""
+    prompt = (
+        f"QUESTION:\n{question.prompt}\n\n"
+        f"RUBRIC:\n{question.expected_answer_notes}\n\n"
+        f"STUDENT ANSWER:\n{answer.text}"
     )
+    response = _client().messages.create(
+        model=_MODEL,
+        max_tokens=1024,
+        #temperature=0,
+        system=_SYSTEM_PROMPT,
+        messages=[{"role": "user", "content": prompt}],
+        output_config={"format": _OUTPUT_SCHEMA},
+    )
+    text = next(block.text for block in response.content if block.type == "text")
+    data = json.loads(text)
+    return EvaluationResult(correct=data["correct"], explanation=data["explanation"])
