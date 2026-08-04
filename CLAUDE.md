@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-Adaptive concept tutor: ingests textbook chapters, builds a concept dependency graph, and runs a Q&A loop that traces wrong answers back to the prerequisite concept at fault. `evaluator.py` (pipeline 2, step 2) and `graph_builder.py` (pipeline 1, step 2) now make real LLM calls; `question_generator.py` and `diagnoser.py` are still stubbed.
+Adaptive concept tutor: ingests textbook chapters, builds a concept dependency graph, and runs a Q&A loop that traces wrong answers back to the prerequisite concept at fault. `evaluator.py` (pipeline 2, step 2), `graph_builder.py` (pipeline 1, step 2), and `question_generator.py` (pipeline 1, step 3) now make real LLM calls; `diagnoser.py` is still stubbed.
 
 ## Commands
 
@@ -17,7 +17,7 @@ cd backend && python3 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"       # uv works too: uv sync --extra dev
 uvicorn app.main:app --reload
 
-# Backend tests (free — evaluator and graph_builder are stubbed via tests/conftest.py, geval/graph_geval suites auto-skip)
+# Backend tests (free — evaluator, graph_builder, and question_generator are stubbed via tests/conftest.py, geval/graph_geval suites auto-skip)
 cd backend && .venv/bin/pytest
 
 # G-Eval regression suite for evaluator.py (real, billed Anthropic API calls — see Testing below)
@@ -35,30 +35,31 @@ npm run build                                # tsc -b && vite build
 
 Two pipelines in `backend/app/services/`:
 
-1. **Pre-questioning** (per uploaded chapter): `POST /api/textbook` → `graph_builder.build_graph()` (real LLM call) → `question_generator.generate_questions()` per concept (still stubbed), all synchronous, results saved to the store.
+1. **Pre-questioning** (per uploaded chapter): `POST /api/textbook` → `graph_builder.build_graph()` (real LLM call) → `question_generator.generate_questions()` (real LLM call, one per concept), all synchronous, results saved to the store.
 2. **Diagnostic loop** (per study session): `POST /api/study-session/{id}/answer` → `evaluator.evaluate()`. Correct → advance `current_concept_id` in topological order. Incorrect → `diagnoser.diagnose()` returns a targeted question probing a prerequisite; study session status becomes `diagnosing`. `evaluator.evaluate()` is real (`diagnoser.py` is still stubbed).
 
-`evaluator.py` calls `claude-haiku-4-5` via the Anthropic SDK with a JSON-schema-constrained response (`_OUTPUT_SCHEMA`) grading the student's answer against `question.expected_answer_notes`. It's the template `graph_builder.py` followed, and the one still to follow when de-stubbing `question_generator.py`/`diagnoser.py`. Known issue: the `temperature=0` call parameter is currently commented out, which means grading is **not deterministic** — the same question/answer pair can flip between `correct: true/false` across calls. Re-enabling it is recommended; the `tests/geval` suite (see Testing below) is what surfaced this.
+`evaluator.py` calls `claude-haiku-4-5` via the Anthropic SDK with a JSON-schema-constrained response (`_OUTPUT_SCHEMA`) grading the student's answer against `question.expected_answer_notes`. It's the template `graph_builder.py` and `question_generator.py` followed, and the one still to follow when de-stubbing `diagnoser.py`. Known issue: the `temperature=0` call parameter is currently commented out, which means grading is **not deterministic** — the same question/answer pair can flip between `correct: true/false` across calls. Re-enabling it is recommended; the `tests/geval` suite (see Testing below) is what surfaced this.
 
 `graph_builder.py` calls `claude-haiku-4-5` (with `temperature=0`, unlike `evaluator.py`) with a JSON-schema-constrained response asking for `{concepts: [{id, label, summary}], edges: [{from, to, evidence}]}` extracted from the chapter text. `_extract_raw_graph()` does the LLM call + parsing + dedup and returns that raw shape (still carrying each edge's `evidence` quote, un-namespaced ids) — it's an internal seam, not stable public API, kept separate so `tests/graph_geval` can grade edge evidence directly. `build_graph()` folds `edges` into each `Concept.depends_on` (`to` depends on `from`) *and* `Concept.evidence` (`{prereq_id: quote}`, one entry per `depends_on` id — the source-text justification for that specific prerequisite, not persisted anywhere before this). It also skips any edge that would introduce a cycle when building `depends_on`/`evidence`, since `topological_order` (`graphlib.TopologicalSorter`) assumes a DAG and would otherwise raise unhandled.
+
+`question_generator.py` calls `claude-sonnet-4-6` (with `temperature=0`) once per concept, with a JSON-schema-constrained response asking for a `{concept_id, questions: [{type, question, grounding}]}` set drawn only from that concept's own evidence anchor (its `summary`), its prerequisites (each with the specific `evidence` quote justifying that dependency, from `Concept.evidence`), and its siblings (other concepts sharing at least one direct prerequisite — concepts with no prerequisites of their own have no siblings). `generate_questions(graph)` mutates every `Concept.questions` in the passed-in graph **in place** (returns `None`) rather than returning a separate map, so the graph stays the single source of truth for a concept's question set; the ingestion router still mirrors each concept's `questions` into the store's separate question index afterward, since `study_session.py` and `routers/questions.py` look questions up there (and diagnostic questions get appended there too). Each returned question's `grounding` quote becomes that `Question.expected_answer_notes` (prefixed "A correct answer is grounded in: ..."), since the prompt doesn't separately ask for rubric notes.
 
 Key seams:
 
 - **Storage**: `backend/app/store/memory_store.py` — abstract `Store` class + `InMemoryStore` + `get_store()` factory (lru_cache singleton). Swapping in Postgres = new subclass + change `get_store()`.
-- **Models**: `backend/app/models/schemas.py` is the source of truth; `frontend/src/types/index.ts` mirrors it **by hand — keep them in sync** (includes `AnswerResponse`, the answer-endpoint envelope). The study-session domain model is named `StudySession`/`StudySessionStatus` (not `Session`) specifically so it won't collide with a future DB session object (e.g. SQLAlchemy's `Session`) once Postgres is wired in.
+- **Models**: `backend/app/models/schemas.py` is the source of truth; `frontend/src/types/index.ts` mirrors it **by hand — keep them in sync** (includes `AnswerResponse`, the answer-endpoint envelope). The study-session domain model is named `StudySession`/`StudySessionStatus` (not `Session`) specifically so it won't collide with a future DB session object (e.g. SQLAlchemy's `Session`) once Postgres is wired in. `Question` is defined before `Concept` in `schemas.py` specifically so `Concept.questions: list[Question]` can reference it directly without a forward ref.
 - **ID conventions (load-bearing)**: concept ids are `{doc_id}:{slug}`, question ids are `{concept_id}:{suffix}` (`q1`, `q2`, `diagnostic`). The study-session router (`routers/study_session.py`) resolves an answered question by `question_id.rsplit(":", 1)[0]` → concept's question set. Diagnostic questions are appended to the store's question set for their concept when generated, so answers to them resolve too.
 - Concept ordering uses `graphlib.TopologicalSorter` (`graph_builder.topological_order`).
 
 ## Stub behavior (intentional, don't "fix")
 
-- `question_generator.py` ignores the source chapter text and returns two templated questions per concept ("explain X" / "give an example of X").
 - `diagnoser.py` always picks the concept's **first** `depends_on` entry (or the concept itself if none). Targeted-question prompts must not embed `suspect.summary` (it leaks the answer); the summary belongs in `expected_answer_notes`.
 
-`evaluator.py` and `graph_builder.py` are no longer part of this list — both make real LLM calls (see Architecture above). `tests/conftest.py` still stubs them (`stub_evaluator` alternates correct/incorrect via a global counter; `stub_graph_builder` returns the old fixed 5-concept calculus graph) for the rest of the test suite, so `test_flow.py` and friends stay free and deterministic.
+`evaluator.py`, `graph_builder.py`, and `question_generator.py` are no longer part of this list — all three make real LLM calls (see Architecture above). `tests/conftest.py` still stubs them (`stub_evaluator` alternates correct/incorrect via a global counter; `stub_graph_builder` returns the old fixed 5-concept calculus graph; `stub_question_generator` sets two templated questions per concept in place, mirroring the old `question_generator` stub) for the rest of the test suite, so `test_flow.py` and friends stay free and deterministic.
 
 ## Testing
 
-- **Stub-backed tests** (`backend/tests/test_flow.py`, `test_health.py`): free, fast, no API key needed. `tests/conftest.py` monkeypatches `evaluator.evaluate` and `graph_builder.build_graph` with deterministic stubs (autouse fixtures) so these never hit the real API.
+- **Stub-backed tests** (`backend/tests/test_flow.py`, `test_health.py`): free, fast, no API key needed. `tests/conftest.py` monkeypatches `evaluator.evaluate`, `graph_builder.build_graph`, and `question_generator.generate_questions` with deterministic stubs (autouse fixtures) so these never hit the real API.
 - **`backend/tests/geval/`** — a G-Eval regression suite (via [DeepEval](https://github.com/confident-ai/deepeval)) that runs the *real* `evaluator.evaluate()` against the 10 questions/42 answer variants in `tests/geval_test_suite.md`, then scores the evaluator's explanation against the golden answer using a `GEval` metric judged by a separate model (`claude-opus-4-5`, deliberately different/stronger than the `claude-haiku-4-5` evaluator under test, to avoid a model grading its own homework).
   - Organized one file per chapter (`test_ch1.py`…`test_ch8.py`), one test function per question/answer-variant pair.
   - `criteria.py` holds each question's G-Eval `criteria` (copied from the markdown) and `evaluation_steps`, hand-derived and **hardcoded** — GEval would otherwise regenerate steps via an LLM call on every run, making the rubric non-deterministic across runs. If a question's criterion changes, regenerate its steps by hand and update `criteria.py`; don't let evaluation_steps go unset.
@@ -80,4 +81,4 @@ Key seams:
 
 ## Not built yet (deliberate)
 
-No persistent DB, no auth. Question generation and gap diagnosis (`question_generator.py`, `diagnoser.py`) are still stubbed — answer grading (`evaluator.py`) and concept-graph extraction (`graph_builder.py`) make real LLM calls so far. CI (`.github/workflows/ci.yml`) only runs backend pytest (stub-backed tests; `tests/geval` and `tests/graph_geval` auto-skip without `LLM_API_KEY`) + frontend build — it does not run either live regression suite.
+No persistent DB, no auth. Gap diagnosis (`diagnoser.py`) is still stubbed — answer grading (`evaluator.py`), concept-graph extraction (`graph_builder.py`), and question generation (`question_generator.py`) make real LLM calls so far. CI (`.github/workflows/ci.yml`) only runs backend pytest (stub-backed tests; `tests/geval` and `tests/graph_geval` auto-skip without `LLM_API_KEY`) + frontend build — it does not run either live regression suite.

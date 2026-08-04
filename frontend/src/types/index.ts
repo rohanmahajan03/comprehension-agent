@@ -1,5 +1,12 @@
 // Mirrors backend/app/models/schemas.py — keep the two in sync.
 
+export interface Question {
+  id: string
+  concept_id: string
+  prompt: string
+  expected_answer_notes: string
+}
+
 export interface Concept {
   id: string
   name: string
@@ -7,18 +14,12 @@ export interface Concept {
   depends_on: string[]
   // Maps each id in depends_on to the source-text quote justifying that prerequisite
   evidence: Record<string, string>
+  questions: Question[]
 }
 
 export interface DependencyGraph {
   doc_id: string
   concepts: Concept[]
-}
-
-export interface Question {
-  id: string
-  concept_id: string
-  prompt: string
-  expected_answer_notes: string
 }
 
 export interface Answer {

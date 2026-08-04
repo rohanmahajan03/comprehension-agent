@@ -32,8 +32,9 @@ def upload_textbook(payload: TextbookUpload) -> TextbookUploadResponse:
     # Synchronous for now; move to a background task/queue once graph building
     # involves real LLM calls.
     graph = graph_builder.build_graph(doc_id, payload.text)
+    question_generator.generate_questions(graph)  # populates concept.questions in place
     store.save_graph(graph)
     for concept in graph.concepts:
-        store.save_questions(concept.id, question_generator.generate_questions(concept))
+        store.save_questions(concept.id, concept.questions)
 
     return TextbookUploadResponse(doc_id=doc_id)

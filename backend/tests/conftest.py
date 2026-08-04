@@ -5,7 +5,7 @@ from itertools import count
 import pytest
 
 from app.models import Answer, Concept, DependencyGraph, EvaluationResult, Question
-from app.services import evaluator, graph_builder
+from app.services import evaluator, graph_builder, question_generator
 
 # Fixed sample graph shape used by the graph_builder stub: (slug, name, summary, depends_on slugs)
 _SAMPLE_CONCEPTS: list[tuple[str, str, str, list[str]]] = [
@@ -73,3 +73,31 @@ def stub_graph_builder(monkeypatch: pytest.MonkeyPatch) -> None:
         return DependencyGraph(doc_id=doc_id, concepts=concepts)
 
     monkeypatch.setattr(graph_builder, "build_graph", _fake_build_graph)
+
+
+@pytest.fixture(autouse=True)
+def stub_question_generator(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Replace the real LLM call with two templated questions per concept, set
+    in place on each concept, so tests never hit the API.
+    """
+
+    def _fake_generate_questions(graph: DependencyGraph) -> None:
+        for concept in graph.concepts:
+            concept.questions = [
+                Question(
+                    id=f"{concept.id}:q1",
+                    concept_id=concept.id,
+                    prompt=f"In your own words, explain what “{concept.name}” means.",
+                    expected_answer_notes=f"A correct answer restates the core idea: {concept.summary}",
+                ),
+                Question(
+                    id=f"{concept.id}:q2",
+                    concept_id=concept.id,
+                    prompt=f"Give an example that illustrates “{concept.name}” and explain why it applies.",
+                    expected_answer_notes=(
+                        f"A correct answer gives a concrete example consistent with: {concept.summary}"
+                    ),
+                ),
+            ]
+
+    monkeypatch.setattr(question_generator, "generate_questions", _fake_generate_questions)

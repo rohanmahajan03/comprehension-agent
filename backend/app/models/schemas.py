@@ -8,6 +8,15 @@ from enum import Enum
 from pydantic import BaseModel, Field
 
 
+class Question(BaseModel):
+    id: str
+    concept_id: str
+    prompt: str # the question that was asked
+    expected_answer_notes: str = Field(
+        description="Notes for the evaluator on what a correct answer should contain"
+    )
+
+
 class Concept(BaseModel):
     id: str
     name: str
@@ -17,20 +26,14 @@ class Concept(BaseModel):
         default_factory=dict,
         description="Maps each id in depends_on to the source-text quote justifying that prerequisite",
     )
+    questions: list[Question] = Field(
+        default_factory=list, description="Question set generated for this concept"
+    )
 
 
 class DependencyGraph(BaseModel):
     doc_id: str
     concepts: list[Concept] = Field(default_factory=list)
-
-
-class Question(BaseModel):
-    id: str
-    concept_id: str
-    prompt: str # the question that was asked
-    expected_answer_notes: str = Field(
-        description="Notes for the evaluator on what a correct answer should contain"
-    )
 
 
 class Answer(BaseModel):
