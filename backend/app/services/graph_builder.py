@@ -113,7 +113,7 @@ def _client() -> anthropic.Anthropic:
     return anthropic.Anthropic(api_key=get_settings().llm_api_key)
 
 
-def _reachable(depends_on: dict[str, list[str]], start: str, target: str) -> bool:
+def _reachable(depends_on: dict[str, dict[str, str]], start: str, target: str) -> bool:
     """Whether `target` can be reached from `start` by following depends_on edges."""
     stack = [start]
     seen: set[str] = set()
@@ -124,7 +124,7 @@ def _reachable(depends_on: dict[str, list[str]], start: str, target: str) -> boo
         if node in seen:
             continue
         seen.add(node)
-        stack.extend(depends_on.get(node, []))
+        stack.extend(depends_on.get(node, {}))
     return False
 
 
@@ -166,21 +166,23 @@ def build_graph(doc_id: str, text: str) -> DependencyGraph:
     """Extract concepts and prerequisite links from raw chapter text via an LLM call."""
     raw = _extract_raw_graph(text)
 
-    # Build the depends_on adjacency, skipping any edge that would introduce a cycle
-    # so the required-DAG invariant (relied on by topological_order) holds.
-    depends_on: dict[str, list[str]] = {c["id"]: [] for c in raw["concepts"]}
+    # Build the depends_on adjacency as prereq id -> evidence quote, skipping any
+    # edge that would introduce a cycle so the required-DAG invariant (relied on by
+    # topological_order) holds.
+    deps: dict[str, dict[str, str]] = {c["id"]: {} for c in raw["concepts"]}
     for edge in raw["edges"]:
         frm, to = edge["from"], edge["to"]
-        if _reachable(depends_on, frm, to):
+        if _reachable(deps, frm, to):
             continue
-        depends_on[to].append(frm)
+        deps[to][frm] = edge["evidence"]
 
     concepts = [
         Concept(
             id=f"{doc_id}:{c['id']}",
             name=c["label"],
             summary=c["summary"],
-            depends_on=[f"{doc_id}:{dep}" for dep in depends_on[c["id"]]],
+            depends_on=[f"{doc_id}:{dep}" for dep in deps[c["id"]]],
+            evidence={f"{doc_id}:{dep}": quote for dep, quote in deps[c["id"]].items()},
         )
         for c in raw["concepts"]
     ]

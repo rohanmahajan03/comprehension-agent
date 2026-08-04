@@ -5,6 +5,8 @@ export interface Concept {
   name: string
   summary: string
   depends_on: string[]
+  // Maps each id in depends_on to the source-text quote justifying that prerequisite
+  evidence: Record<string, string>
 }
 
 export interface DependencyGraph {

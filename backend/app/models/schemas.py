@@ -13,6 +13,10 @@ class Concept(BaseModel):
     name: str
     summary: str
     depends_on: list[str] = Field(default_factory=list, description="IDs of prerequisite concepts")
+    evidence: dict[str, str] = Field(
+        default_factory=dict,
+        description="Maps each id in depends_on to the source-text quote justifying that prerequisite",
+    )
 
 
 class DependencyGraph(BaseModel):
