@@ -2,11 +2,19 @@
 
 import json
 from functools import lru_cache
+from typing import TypedDict
 
 import anthropic
 
 from app.config import get_settings
 from app.models import Concept, DependencyGraph, Question
+
+
+class RawQuestion(TypedDict):
+    type: str
+    question: str
+    grounding: str
+
 
 _MODEL = "claude-sonnet-4-6"
 
@@ -82,6 +90,14 @@ Return only valid JSON. No preamble, no explanation, no markdown fences.
 4. Questions should be answerable by a student who has only read the provided evidence.
 5. Each question should target the concept at a level appropriate to its type.
 6. Do not reveal the answer in the question itself.
+7. When evidence spans multiple source passages (e.g. the target concept's own
+   evidence plus a prerequisite's or sibling's), treat each passage as atomic — a
+   passage is everything given for that source, not a single sentence within it.
+   Quote every passage you draw on in full, from start to end: never truncate
+   mid-clause, drop a trailing sentence, or compress/shorten a passage because its
+   content seems to overlap or repeat what another passage you are also quoting
+   already says. Redundancy between passages is never a reason to shorten either
+   one — quote both in full anyway.
 
 ## Input
 
@@ -115,6 +131,9 @@ _OUTPUT_SCHEMA = {
 }
 
 
+_GROUNDING_PREFIX = "A correct answer is grounded in: "
+
+
 @lru_cache
 def _client() -> anthropic.Anthropic:
     return anthropic.Anthropic(api_key=get_settings().llm_api_key)
@@ -135,7 +154,15 @@ def _siblings_of(target: Concept, graph: DependencyGraph) -> list[Concept]:
     return [c for c in graph.concepts if c.id != target.id and target_deps & set(c.depends_on)]
 
 
-def _generate_for_concept(concept: Concept, by_id: dict[str, Concept], graph: DependencyGraph) -> list[Question]:
+def _generate_raw_for_concept(concept: Concept, by_id: dict[str, Concept], graph: DependencyGraph) -> list[RawQuestion]:
+    """Call the LLM for a single concept and return its raw question list as-is
+    (each still carrying its `type` and unwrapped `grounding` quote).
+
+    Internal seam, not part of the stable public API: `generate_questions()` below
+    folds each raw item into a `Question` (dropping `type`, folding `grounding` into
+    `expected_answer_notes`) — kept separate so tests/question_geval can grade
+    question-type coverage and grounding directly.
+    """
     payload = {
         "target_concept": _describe(concept, concept.summary),
         "prerequisites": [
@@ -155,16 +182,7 @@ def _generate_for_concept(concept: Concept, by_id: dict[str, Concept], graph: De
     )
     text = next(block.text for block in response.content if block.type == "text")
     data = json.loads(text)
-
-    return [
-        Question(
-            id=f"{concept.id}:q{i + 1}",
-            concept_id=concept.id,
-            prompt=q["question"],
-            expected_answer_notes=f"A correct answer is grounded in: {q['grounding']}",
-        )
-        for i, q in enumerate(data["questions"])
-    ]
+    return data["questions"]
 
 
 def generate_questions(graph: DependencyGraph) -> None:
@@ -178,4 +196,13 @@ def generate_questions(graph: DependencyGraph) -> None:
     """
     by_id = {c.id: c for c in graph.concepts}
     for concept in graph.concepts:
-        concept.questions = _generate_for_concept(concept, by_id, graph)
+        raw_questions = _generate_raw_for_concept(concept, by_id, graph)
+        concept.questions = [
+            Question(
+                id=f"{concept.id}:q{i + 1}",
+                concept_id=concept.id,
+                prompt=q["question"],
+                expected_answer_notes=f"{_GROUNDING_PREFIX}{q['grounding']}",
+            )
+            for i, q in enumerate(raw_questions)
+        ]
