@@ -26,7 +26,7 @@ The Tool Runner is the normal default for a custom-tool agent, but this design n
 
 - `turns_used` counts API round-trips (one `messages.create()` call), not individual tool invocations within a turn.
 - **Parallel tool use is disabled** (`tool_choice: {"type": "any", "disable_parallel_tool_use": true}` on ordinary turns). This is a sequential investigation — each `get_prereqs` result should inform the next choice — not a fan-out, and disabling parallel calls keeps the budget accounting exact (1 tool call = 1 turn).
-- **Default budget: 8 turns** (7 investigative + 1 forced-final). Tunable; not load-bearing on any other part of the system.
+- **Default budget: 5 turns** (4 investigative + 1 forced-final). Tunable; not load-bearing on any other part of the system.
 - On the final permitted turn, `tool_choice` is forced to `{"type": "tool", "name": "submit_diagnosis"}` with only that tool declared — guarantees a structured result even at low confidence, rather than falling back to a code-side default.
 
 ## 3. Tool surface
