@@ -1,6 +1,230 @@
-"""Gap diagnosis: walk dependencies to find the root misunderstanding (pipeline 2, steps 3-5)."""
+"""Gap diagnosis: walk dependencies to find the root misunderstanding (pipeline 2, steps 3-5).
 
-from app.models import Answer, Concept, DependencyGraph, DiagnosisResult, Question
+Unlike the other three services, this one is not a single structured LLM call. It runs a
+bounded tool-calling loop: the model investigates the prerequisite chain with `get_prereqs`,
+checks for an existing question with `pull_question_from_storage`, synthesizes one with
+`generate_question` if needed, and must finish by calling `submit_diagnosis`. See
+docs/specs/2026-08-10-diagnoser-agentic-pipeline-design.md for the design rationale.
+"""
+
+import json
+from functools import lru_cache
+from typing import Any, TypedDict
+
+import anthropic
+
+from app.config import get_settings
+from app.models import (
+    Answer,
+    Concept,
+    DependencyGraph,
+    DiagnosisResult,
+    EvaluationResult,
+    Question,
+)
+
+
+class RawQuestion(TypedDict):
+    question: str
+    grounding: str
+
+
+_ORCHESTRATOR_MODEL = "claude-sonnet-4-6"
+_GENERATOR_MODEL = "claude-sonnet-4-6"
+# Match/no-match over a handful of candidates is a mechanical judgment, the same tier of task
+# as question_geval's judge_similarity() — it doesn't need the orchestrator's model.
+_JUDGE_MODEL = "claude-haiku-4-5"
+
+# 4 investigative turns + 1 forced-final turn.
+_MAX_TURNS = 5
+
+# Same phrasing question_generator uses, so expected_answer_notes reads consistently to the
+# evaluator regardless of which pipeline produced the question.
+_GROUNDING_PREFIX = "A correct answer is grounded in: "
+
+
+class _ToolError(Exception):
+    """Raised by a tool executor to return an is_error tool_result the model can recover from."""
+
+
+# --- orchestration ------------------------------------------------------------------------
+
+_SYSTEM_PROMPT = """You are a diagnostician for an adaptive tutoring system.
+
+A student answered a question incorrectly. An evaluator has already graded that answer and
+stated precisely which elements the rubric required that were missing or wrong — it deliberately
+did not speculate about *why*. That is your job: trace the failure to the specific prerequisite
+concept the student does not understand, and produce a question that isolates it.
+
+## Your procedure
+
+1. Read the evaluator's finding. That is the deficiency: what the answer failed to show.
+2. Use `get_prereqs` to see what the answered concept depends on, along with the source-text
+   evidence justifying each dependency. Call it again on a prerequisite's own id to walk further
+   down the chain — the root gap is often deeper than one hop.
+3. Once you have a candidate suspect and can state the deficiency in terms of that concept, use
+   `pull_question_from_storage` to check whether a question targeting it already exists. If
+   nothing targets it, use `generate_question` to create one.
+4. Call `submit_diagnosis` with the suspect concept, the question, and your evidence.
+
+## Certainty
+
+Do not submit a diagnosis that merely feels plausible. Submit with confidence "high" only when
+you can point to a specific element the evaluator flagged and connect it to specific wording in
+the suspect concept's evidence. If you cannot do that yet, keep investigating with `get_prereqs`.
+A submission below "high" confidence will be rejected and you will have to continue.
+
+## Budget
+
+You have a limited number of turns, and each tool call costs one. Spend them investigating
+rather than restating. On your final turn you will be required to submit your best diagnosis
+whatever its confidence, so do not leave yourself with nothing to submit.
+
+## Rules
+
+1. Never reveal the answer in the question you select or generate. Probing a concept means
+   asking the student to demonstrate it, not showing them what the source text says about it.
+2. Only diagnose concepts that appear in the graph. If the answered concept has no
+   prerequisites, it is itself the root gap — diagnose it.
+3. Base your diagnosis on the evaluator's finding, not on your own re-grading of the answer."""
+
+_GET_PREREQS_TOOL = {
+    "name": "get_prereqs",
+    "description": (
+        "Return the immediate prerequisites of a concept, each with the evidence quote that "
+        "justifies the dependency. Call this on a prerequisite's own id to walk one level "
+        "deeper into the chain. An empty list means this concept has no further prerequisites "
+        "(a leaf)."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {"concept_id": {"type": "string"}},
+        "required": ["concept_id"],
+    },
+}
+
+_PULL_QUESTION_TOOL = {
+    "name": "pull_question_from_storage",
+    "description": (
+        "Check whether an existing question for this concept already targets the given "
+        "deficiency. Call this once you have a candidate suspect concept and can state the "
+        "deficiency in terms of it. Returns the matching question if one adequately targets "
+        "this exact deficiency, or none if nothing does — in which case use generate_question."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "concept_id": {"type": "string"},
+            "focus": {
+                "type": "string",
+                "description": (
+                    "The deficiency to check for, stated in terms of this concept — the same "
+                    "content you would pass to generate_question."
+                ),
+            },
+        },
+        "required": ["concept_id", "focus"],
+    },
+}
+
+_GENERATE_QUESTION_TOOL = {
+    "name": "generate_question",
+    "description": (
+        "Generate one new question that isolates a specific understanding gap within a concept, "
+        "grounded strictly in that concept's own evidence. Use this only when "
+        "pull_question_from_storage has nothing that precisely isolates the gap you suspect."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "concept_id": {"type": "string"},
+            "focus": {
+                "type": "string",
+                "description": (
+                    "What specifically to probe — the deficiency you have traced to this "
+                    "concept, stated in terms of what the evaluator's finding flagged as "
+                    "missing or wrong."
+                ),
+            },
+        },
+        "required": ["concept_id", "focus"],
+    },
+}
+
+_SUBMIT_DIAGNOSIS_TOOL = {
+    "name": "submit_diagnosis",
+    "description": (
+        "Submit your final diagnosis. Only call this with confidence 'high' if you have concrete "
+        "evidence — a specific element the evaluator's finding flagged as missing or wrong, "
+        "connected to specific wording in the suspect prerequisite's evidence. A gut feeling is "
+        "not enough; if you are not certain, keep investigating with get_prereqs instead."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "suspected_gap_concept_id": {"type": "string"},
+            "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
+            "reasoning": {
+                "type": "string",
+                "description": "Why this concept, in plain terms suitable for the diagnosis record.",
+            },
+            "evidence_basis": {
+                "type": "string",
+                "description": (
+                    "The specific element from the evaluator's finding and the specific wording "
+                    "in the suspect's evidence that connect them."
+                ),
+            },
+            "question_source": {"type": "string", "enum": ["storage", "generated"]},
+            "question_id": {
+                "type": "string",
+                "description": "Required when question_source is 'storage'.",
+            },
+            "question_text": {
+                "type": "string",
+                "description": "Required when question_source is 'generated'.",
+            },
+            "grounding": {
+                "type": "string",
+                "description": "Required when question_source is 'generated'.",
+            },
+        },
+        "required": [
+            "suspected_gap_concept_id",
+            "confidence",
+            "reasoning",
+            "evidence_basis",
+            "question_source",
+        ],
+    },
+}
+
+_INVESTIGATIVE_TOOLS = [
+    _GET_PREREQS_TOOL,
+    _PULL_QUESTION_TOOL,
+    _GENERATE_QUESTION_TOOL,
+    _SUBMIT_DIAGNOSIS_TOOL,
+]
+
+
+@lru_cache
+def _client() -> anthropic.Anthropic:
+    return anthropic.Anthropic(api_key=get_settings().llm_api_key)
+
+
+def _opening_prompt(
+    concept: Concept, question: Question, answer: Answer, evaluation: EvaluationResult
+) -> str:
+    return (
+        f"CONCEPT UNDER TEST: {concept.name} (id: {concept.id})\n"
+        f"{concept.summary}\n\n"
+        f"QUESTION ASKED:\n{question.prompt}\n\n"
+        f"STUDENT ANSWER:\n{answer.text}\n\n"
+        f"EVALUATOR'S FINDING (what the answer was missing or got wrong):\n"
+        f"{evaluation.explanation}\n\n"
+        "Diagnose which concept the misunderstanding stems from, and produce a question that "
+        "isolates it."
+    )
 
 
 def diagnose(
@@ -8,37 +232,359 @@ def diagnose(
     graph: DependencyGraph,
     question: Question,
     answer: Answer,
+    evaluation: EvaluationResult,
 ) -> DiagnosisResult:
     """Given a wrong answer on `concept`, find the prerequisite most likely at fault
     and produce a targeted question that probes it.
 
-    # TODO: Replace with real logic — (1) look at concept.depends_on and the source
-    # material, (2) call an LLM with the wrong answer + prerequisite summaries to
-    # decide which prerequisite the misunderstanding most likely stems from, and
-    # (3) generate a question that isolates that prerequisite. Repeated wrong
-    # answers should recurse further down the dependency chain until the root gap
-    # is found. The stub below just picks the first listed prerequisite (or the
-    # concept itself if it has none).
+    Runs a bounded tool-calling loop (`_MAX_TURNS` round-trips). The model investigates the
+    prerequisite chain, then must call `submit_diagnosis`; that call is rejected unless it
+    carries "high" confidence, except on the final turn, where a submission is forced and
+    accepted at whatever confidence it comes back with.
     """
     by_id = {c.id: c for c in graph.concepts}
-    suspect = next(
-        (by_id[dep] for dep in concept.depends_on if dep in by_id),
-        concept,
+    messages: list[dict[str, Any]] = [
+        {"role": "user", "content": _opening_prompt(concept, question, answer, evaluation)}
+    ]
+
+    for turn in range(_MAX_TURNS):
+        is_final = turn == _MAX_TURNS - 1
+        response = _client().messages.create(
+            model=_ORCHESTRATOR_MODEL,
+            max_tokens=2048,
+            temperature=0,
+            system=_SYSTEM_PROMPT,
+            messages=messages,
+            # On the final turn only submit_diagnosis is offered, and it is forced, so the loop
+            # always terminates with a real model judgment rather than a code-side fallback.
+            tools=[_SUBMIT_DIAGNOSIS_TOOL] if is_final else _INVESTIGATIVE_TOOLS,
+            tool_choice=(
+                {"type": "tool", "name": "submit_diagnosis"}
+                if is_final
+                # Sequential investigation: each result should inform the next choice, and one
+                # tool call per turn keeps the budget accounting exact.
+                else {"type": "any", "disable_parallel_tool_use": True}
+            ),
+        )
+        messages.append({"role": "assistant", "content": response.content})
+
+        tool_results = []
+        for block in response.content:
+            if block.type != "tool_use":
+                continue
+            if block.name == "submit_diagnosis":
+                try:
+                    return _accept_diagnosis(block.input, concept, by_id, is_final)
+                except _ToolError as exc:
+                    tool_results.append(_error_result(block.id, str(exc)))
+                continue
+            tool_results.append(_run_tool(block.id, block.name, block.input, by_id))
+
+        if not tool_results:
+            # tool_choice should make this unreachable, but don't hand the API an empty turn.
+            messages.append(
+                {"role": "user", "content": "Use one of the available tools to continue."}
+            )
+            continue
+        messages.append({"role": "user", "content": tool_results})
+
+    raise RuntimeError("diagnose() exhausted its turn budget without a forced submission")
+
+
+def _run_tool(
+    tool_use_id: str, name: str, payload: dict[str, Any], by_id: dict[str, Concept]
+) -> dict[str, Any]:
+    """Execute one investigative tool call and wrap its output as a tool_result block."""
+    try:
+        if name == "get_prereqs":
+            result: Any = _get_prereqs(payload["concept_id"], by_id)
+        elif name == "pull_question_from_storage":
+            result = _pull_question_from_storage(payload["concept_id"], payload["focus"], by_id)
+        elif name == "generate_question":
+            result = _generate_question(payload["concept_id"], payload["focus"], by_id)
+        else:
+            raise _ToolError(f"Unknown tool '{name}'.")
+    except _ToolError as exc:
+        return _error_result(tool_use_id, str(exc))
+    return {
+        "type": "tool_result",
+        "tool_use_id": tool_use_id,
+        "content": json.dumps(result),
+    }
+
+
+def _error_result(tool_use_id: str, message: str) -> dict[str, Any]:
+    return {
+        "type": "tool_result",
+        "tool_use_id": tool_use_id,
+        "content": message,
+        "is_error": True,
+    }
+
+
+def _resolve(concept_id: str, by_id: dict[str, Concept]) -> Concept:
+    target = by_id.get(concept_id)
+    if target is None:
+        raise _ToolError(f"Unknown concept id '{concept_id}'. Use ids exactly as returned.")
+    return target
+
+
+# --- tool implementations -----------------------------------------------------------------
+
+
+def _get_prereqs(concept_id: str, by_id: dict[str, Concept]) -> list[dict[str, str]]:
+    """The concept's immediate prerequisites, each with the quote justifying that dependency."""
+    target = _resolve(concept_id, by_id)
+    return [
+        {
+            "id": dep_id,
+            "name": by_id[dep_id].name,
+            "summary": by_id[dep_id].summary,
+            "evidence": target.evidence.get(dep_id, ""),
+        }
+        for dep_id in target.depends_on
+        if dep_id in by_id
+    ]
+
+
+def _pull_question_from_storage(
+    concept_id: str, focus: str, by_id: dict[str, Concept]
+) -> dict[str, Any]:
+    """Whether an existing question for this concept already targets `focus`."""
+    target = _resolve(concept_id, by_id)
+    match = _find_matching_question(target.questions, focus)
+    if match is None:
+        return {"match": None}
+    return {"match": {"id": match.id, "prompt": match.prompt}}
+
+
+def _generate_question(concept_id: str, focus: str, by_id: dict[str, Concept]) -> RawQuestion:
+    target = _resolve(concept_id, by_id)
+    return _generate_raw_question(target, focus)
+
+
+# --- nested LLM calls ---------------------------------------------------------------------
+
+_MATCH_SYSTEM_PROMPT = """You decide whether an existing assessment question already targets a
+specific understanding gap.
+
+You will be given a description of a deficiency — what a student failed to demonstrate — and a
+list of candidate questions about the same concept. Return the id of the one question that would
+directly surface that specific deficiency if the student still holds it.
+
+Be strict. A question that covers the same concept but tests a different facet of it is NOT a
+match: answering it correctly would not rule the deficiency out. Only match when the question
+would actually expose this gap. If no candidate does, return an empty string."""
+
+_MATCH_SCHEMA = {
+    "type": "json_schema",
+    "schema": {
+        "type": "object",
+        "properties": {
+            "match_question_id": {
+                "type": "string",
+                "description": "Id of the matching question, or an empty string if none matches.",
+            },
+            "reasoning": {"type": "string"},
+        },
+        "required": ["match_question_id", "reasoning"],
+        "additionalProperties": False,
+    },
+}
+
+
+def _find_matching_question(candidates: list[Question], focus: str) -> Question | None:
+    """Judge whether any candidate question already adequately targets `focus`.
+
+    A narrowly-scoped nested LLM call: whether a question "precisely isolates" a deficiency is a
+    semantic judgment (a question can share a topic with the deficiency while testing a different
+    facet of it entirely), so keyword overlap is not good enough. Returns the matching question,
+    or None if no candidate targets the deficiency.
+    """
+    if not candidates:
+        return None
+    payload = {
+        "deficiency": focus,
+        "candidates": [{"id": q.id, "question": q.prompt} for q in candidates],
+    }
+    response = _client().messages.create(
+        model=_JUDGE_MODEL,
+        max_tokens=512,
+        temperature=0,
+        system=_MATCH_SYSTEM_PROMPT,
+        messages=[{"role": "user", "content": json.dumps(payload)}],
+        output_config={"format": _MATCH_SCHEMA},
     )
-    targeted_question = Question(
-        id=f"{suspect.id}:diagnostic",
-        concept_id=suspect.id,
-        prompt=(
-            f"Let's check a prerequisite. In your own words, what does “{suspect.name}” "
-            "mean, and why does it matter here?"
-        ),
-        expected_answer_notes=f"A correct answer restates the core idea: {suspect.summary}",
+    text = next(block.text for block in response.content if block.type == "text")
+    matched_id = json.loads(text)["match_question_id"]
+    return next((q for q in candidates if q.id == matched_id), None)
+
+
+_GENERATE_SYSTEM_PROMPT = """You are an expert tutor writing a single diagnostic question.
+
+You will be given a concept, its evidence text, and a specific deficiency a student appears to
+have. Write one question that would surface that deficiency: if the student holds the
+misunderstanding, they should answer it wrong; if they do not, they should answer it right.
+
+## Output format
+
+Return only valid JSON. No preamble, no explanation, no markdown fences.
+
+{
+  "question": "string",
+  "grounding": "the evidence text a correct answer is grounded in"
+}
+
+## Rules
+
+1. Ground the question strictly in the provided evidence text. Do not draw on general knowledge
+   beyond what is stated.
+2. Do not reveal the answer in the question itself. Never restate, paraphrase, or quote the
+   concept's evidence text inside the question — the student must supply that understanding, and
+   a question that contains it tests nothing.
+3. Target the stated deficiency specifically, not the concept in general.
+4. Ask exactly one question. Do not bundle multiple asks into one prompt.
+5. Treat the evidence text as atomic: quote it in the "grounding" field in full, from start to
+   end. Never truncate mid-clause or drop a trailing sentence, even if part of it seems
+   redundant."""
+
+_GENERATE_SCHEMA = {
+    "type": "json_schema",
+    "schema": {
+        "type": "object",
+        "properties": {
+            "question": {"type": "string"},
+            "grounding": {"type": "string"},
+        },
+        "required": ["question", "grounding"],
+        "additionalProperties": False,
+    },
+}
+
+
+def _generate_raw_question(concept: Concept, focus: str) -> RawQuestion:
+    """Write one diagnostic question isolating `focus` within `concept`.
+
+    Grounded only in the concept's own evidence anchor (its `summary`), which must not leak into
+    the question text — it belongs in `expected_answer_notes` for the evaluator, not in the
+    prompt the student sees.
+    """
+    payload = {
+        "concept": {"id": concept.id, "name": concept.name, "evidence": concept.summary},
+        "deficiency": focus,
+    }
+    response = _client().messages.create(
+        model=_GENERATOR_MODEL,
+        max_tokens=1024,
+        temperature=0,
+        system=_GENERATE_SYSTEM_PROMPT,
+        messages=[{"role": "user", "content": json.dumps(payload)}],
+        output_config={"format": _GENERATE_SCHEMA},
     )
+    text = next(block.text for block in response.content if block.type == "text")
+    data = json.loads(text)
+    return {"question": data["question"], "grounding": data["grounding"]}
+
+
+# --- diagnosis assembly -------------------------------------------------------------------
+
+
+def _accept_diagnosis(
+    payload: dict[str, Any],
+    concept: Concept,
+    by_id: dict[str, Concept],
+    is_final: bool,
+) -> DiagnosisResult:
+    """Build the DiagnosisResult, or raise _ToolError to reject the submission.
+
+    The confidence gate lives here rather than in the prompt: below "high" the submission is
+    refused outright and the model has to keep investigating. On the final turn nothing is
+    rejected — the loop must terminate — so each check degrades to a best-effort repair instead.
+    """
+    if not is_final and payload.get("confidence") != "high":
+        raise _ToolError(
+            "Rejected: confidence must be 'high' to submit. Keep investigating with "
+            "get_prereqs until you can connect a specific element of the evaluator's finding "
+            "to specific wording in a concept's evidence."
+        )
+
+    suspect_id = payload.get("suspected_gap_concept_id", "")
+    suspect = by_id.get(suspect_id)
+    if suspect is None:
+        if not is_final:
+            raise _ToolError(
+                f"Rejected: '{suspect_id}' is not a concept in this graph. Diagnose one of the "
+                "ids returned by get_prereqs, or the concept under test itself."
+            )
+        # Forced turn with an id that isn't in the graph — fall back to the concept under test
+        # so the caller still gets a usable result.
+        suspect = concept
+
     return DiagnosisResult(
         suspected_gap_concept_id=suspect.id,
-        reasoning=(
-            f"[stub] The answer about “{concept.name}” was incorrect, and “{suspect.name}” "
-            "is its first listed prerequisite — probing it to see if the gap is there."
-        ),
-        targeted_question=targeted_question,
+        reasoning=_fold_reasoning(payload),
+        targeted_question=_resolve_targeted_question(payload, suspect, is_final),
     )
+
+
+def _resolve_targeted_question(
+    payload: dict[str, Any], suspect: Concept, is_final: bool
+) -> Question:
+    """Pick the existing question the model chose, or build one from the text it wrote.
+
+    Raises _ToolError when the submission didn't carry a usable question, so the model can fix
+    that specific problem. On the final turn one is synthesized instead, since there is no
+    further turn in which to ask.
+    """
+    if payload.get("question_source") == "storage":
+        question_id = payload.get("question_id") or ""
+        existing = next((q for q in suspect.questions if q.id == question_id), None)
+        if existing is not None:
+            return existing
+        if not is_final:
+            raise _ToolError(
+                f"Rejected: question_source 'storage' but '{question_id}' is not a question on "
+                f"'{suspect.id}'. Use an id from pull_question_from_storage, or generate one."
+            )
+
+    prompt = (payload.get("question_text") or "").strip()
+    grounding = (payload.get("grounding") or "").strip()
+    if not prompt:
+        if not is_final:
+            raise _ToolError(
+                "Rejected: question_source 'generated' requires question_text (and the "
+                "grounding it is based on). Call generate_question first."
+            )
+        raw = _generate_raw_question(suspect, payload.get("evidence_basis", "") or suspect.name)
+        prompt, grounding = raw["question"], raw["grounding"]
+
+    return Question(
+        id=_next_diagnostic_id(suspect),
+        concept_id=suspect.id,
+        prompt=prompt,
+        expected_answer_notes=f"{_GROUNDING_PREFIX}{grounding or suspect.summary}",
+    )
+
+
+def _next_diagnostic_id(suspect: Concept) -> str:
+    """Numbered `{concept_id}:diagnosticN` id.
+
+    Numbered rather than a bare `:diagnostic` suffix because a concept can be diagnosed more than
+    once in a session with a different gap each time; a fixed suffix would collide, and the
+    router dedupes by id — it would silently keep serving the first question's rubric.
+    """
+    prefix = f"{suspect.id}:diagnostic"
+    taken = sum(1 for q in suspect.questions if q.id.startswith(prefix))
+    return f"{prefix}{taken + 1}"
+
+
+def _fold_reasoning(payload: dict[str, Any]) -> str:
+    """Flatten the submission into the single `reasoning` string DiagnosisResult carries."""
+    parts = [payload.get("reasoning", "").strip()]
+    basis = payload.get("evidence_basis", "").strip()
+    if basis:
+        parts.append(f"Evidence: {basis}")
+    confidence = payload.get("confidence")
+    if confidence != "high":
+        parts.append(f"(Submitted at {confidence} confidence — turn budget exhausted.)")
+    return "\n\n".join(part for part in parts if part)

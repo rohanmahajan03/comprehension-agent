@@ -4,8 +4,15 @@ from itertools import count
 
 import pytest
 
-from app.models import Answer, Concept, DependencyGraph, EvaluationResult, Question
-from app.services import evaluator, graph_builder, question_generator
+from app.models import (
+    Answer,
+    Concept,
+    DependencyGraph,
+    DiagnosisResult,
+    EvaluationResult,
+    Question,
+)
+from app.services import diagnoser, evaluator, graph_builder, question_generator
 
 # Fixed sample graph shape used by the graph_builder stub: (slug, name, summary, depends_on slugs)
 _SAMPLE_CONCEPTS: list[tuple[str, str, str, list[str]]] = [
@@ -101,3 +108,41 @@ def stub_question_generator(monkeypatch: pytest.MonkeyPatch) -> None:
             ]
 
     monkeypatch.setattr(question_generator, "generate_questions", _fake_generate_questions)
+
+
+@pytest.fixture(autouse=True)
+def stub_diagnoser(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Replace the real tool-calling loop with the old deterministic stub so tests never hit
+    the API: pick the concept's first listed prerequisite (or the concept itself if it has
+    none) and probe it with a templated question.
+    """
+
+    def _fake_diagnose(
+        concept: Concept,
+        graph: DependencyGraph,
+        question: Question,
+        answer: Answer,
+        evaluation: EvaluationResult,
+    ) -> DiagnosisResult:
+        by_id = {c.id: c for c in graph.concepts}
+        suspect = next((by_id[dep] for dep in concept.depends_on if dep in by_id), concept)
+        targeted_question = Question(
+            id=f"{suspect.id}:diagnostic{sum(1 for q in suspect.questions if ':diagnostic' in q.id) + 1}",
+            concept_id=suspect.id,
+            prompt=(
+                f"Let's check a prerequisite. In your own words, what does “{suspect.name}” "
+                "mean, and why does it matter here?"
+            ),
+            expected_answer_notes=f"A correct answer restates the core idea: {suspect.summary}",
+        )
+        return DiagnosisResult(
+            suspected_gap_concept_id=suspect.id,
+            reasoning=(
+                f"[test stub] The answer about “{concept.name}” was incorrect, and "
+                f"“{suspect.name}” is its first listed prerequisite — probing it to see if the "
+                "gap is there."
+            ),
+            targeted_question=targeted_question,
+        )
+
+    monkeypatch.setattr(diagnoser, "diagnose", _fake_diagnose)

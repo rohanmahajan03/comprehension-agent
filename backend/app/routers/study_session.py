@@ -108,12 +108,17 @@ def submit_answer(study_session_id: str, answer: Answer) -> AnswerResponse:
             raise HTTPException(
                 status_code=404, detail=f"Unknown concept '{question.concept_id}'"
             )
-        diagnosis = diagnoser.diagnose(concept, graph, question, answer)
-        # Register the targeted question so the answer to it can be resolved later.
+        diagnosis = diagnoser.diagnose(concept, graph, question, answer, evaluation)
+        # Register the targeted question so the answer to it can be resolved later, and mirror
+        # it onto the graph so a later diagnosis of the same concept can find it as a candidate.
         targeted = diagnosis.targeted_question
         existing = store.get_questions(targeted.concept_id) or []
         if all(q.id != targeted.id for q in existing):
             store.save_questions(targeted.concept_id, [*existing, targeted])
+            suspect = by_id.get(targeted.concept_id)
+            if suspect is not None and all(q.id != targeted.id for q in suspect.questions):
+                suspect.questions.append(targeted)
+                store.save_graph(graph)
         study_session.status = StudySessionStatus.DIAGNOSING
         next_question = targeted
 
