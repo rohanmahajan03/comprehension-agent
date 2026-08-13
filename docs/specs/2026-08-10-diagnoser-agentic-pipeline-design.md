@@ -95,7 +95,22 @@ def _find_matching_question(candidates: list[Question], focus: str) -> Question 
 
 This keeps the top-level orchestrating model from having to read and judge every candidate question's fit itself inside the main loop — `pull_question_from_storage` returns a decisive answer (a matched question, or explicitly none) in one tool call, backed by one small judge call, rather than a raw list the orchestrator has to reason over on its own turn.
 
-**Known scope boundary:** the candidate set is still only each concept's original pipeline-1 questions. A diagnostic question generated for the same concept in an *earlier* wrong-answer round this session lives only in the store's separate question index ([study_session.py](../../../backend/app/routers/study_session.py)'s `store.save_questions(...)` calls) — the in-memory `graph` object is never mutated with it, so neither the candidate list nor the matching helper ever sees it. That's a real, narrow limitation, not something worth designing around now; if it matters later, whatever needs it can pass the store's question list in at that point.
+**Requires one addition to `study_session.py` so the candidate set stays complete across rounds.** Today, when a diagnostic question is registered, `submit_answer` only appends it to the store's separate question index (`store.save_questions(targeted.concept_id, [*existing, targeted])`) — it never touches `graph.concepts[i].questions`, the list this tool reads from. Left as-is, a diagnostic question generated for a concept in an *earlier* wrong-answer round this session would be invisible to this tool in a *later* round on that same concept.
+
+The fix: in that same registration block, also append `targeted` to the suspect concept's own `questions` list on the graph, and explicitly persist the change via `store.save_graph(graph)` — matching the "mutate then explicitly save" pattern the router already uses for `study_session` two lines below in the same function, rather than relying on `InMemoryStore` happening to hand back the same object reference on every `get_graph()` call:
+
+```python
+targeted = diagnosis.targeted_question
+existing = store.get_questions(targeted.concept_id) or []
+if all(q.id != targeted.id for q in existing):
+    store.save_questions(targeted.concept_id, [*existing, targeted])
+    suspect = by_id.get(targeted.concept_id)
+    if suspect is not None and all(q.id != targeted.id for q in suspect.questions):
+        suspect.questions.append(targeted)
+        store.save_graph(graph)
+```
+
+With this in place, `graph.concepts[i].questions` always reflects every diagnostic question generated for that concept so far this session, not just its original pipeline-1 set — so this tool's candidate list, and the matching helper above, never miss one.
 
 ### 3.3 `generate_question`
 
@@ -169,6 +184,7 @@ There is no code-side fallback (e.g. "just return the deepest concept examined")
 
 - **Signature:** `diagnose(concept, graph, question, answer, evaluation: EvaluationResult)` — `evaluation` is a required new parameter, not optional. Unlike a storage lookup, this is real data the router already computes immediately before calling `diagnose()` (`evaluation = evaluator.evaluate(question, answer)` at [study_session.py:87](../../../backend/app/routers/study_session.py#L87)), so the only change needed at the call site is passing it through — no new I/O, no stub.
 - **`DiagnosisResult` is unchanged.** `confidence` and `evidence_basis` are internal to the tool-call trace and get folded into `DiagnosisResult.reasoning` as prose, not added as new schema fields — no changes needed to `backend/app/models/schemas.py` or `frontend/src/types/index.ts`.
+- **`study_session.py`'s targeted-question registration block gets one addition** (detailed in §3.2): alongside its existing `store.save_questions(...)` call, it also appends the targeted question to the suspect concept's `questions` list on `graph` and calls `store.save_graph(graph)`. This is what keeps `pull_question_from_storage`'s candidate set complete across multiple diagnostic rounds in the same session — without it, a question generated for a concept in one round would be invisible to the tool if that same concept comes up again in a later round.
 - **Drilling across multiple wrong answers composes for free — this is not `diagnose()` calling itself.** `diagnose()` never recurses in the Python sense; its turn-budget loop (§2) is a single function call, one process, one call stack. The drilling-deeper behavior instead comes from `submit_answer()` in `study_session.py` being invoked again by a **separate HTTP request** each time the student submits another answer — the frontend calls `POST /api/study-session/{id}/answer` anew, paced entirely by the student actually responding, not by any server-side loop. Each invocation is independent, sharing no in-process state with the last; the only thing carried across calls is whatever got persisted to the store in between (the targeted question, the session's `DIAGNOSING` status).
 
   What makes repeated calls drill *deeper* rather than repeat the same concept is that [study_session.py:106](../../../backend/app/routers/study_session.py#L106) derives `concept` fresh from `question.concept_id` on every call — never from a remembered "original concept." So: student answers wrong on concept A → `diagnose(concept=A, ...)` investigates A's prerequisites and returns a targeted question about concept C. If the student then answers *that* question wrong too, `_find_question` resolves it back to C, so this next `submit_answer()` call sees `question.concept_id = C` and calls `diagnose(concept=C, ...)` — a fresh, independent invocation scoped one level deeper than before. Nothing in `study_session.py` needs to change for this to work; it falls out of code that already existed for an unrelated reason (resolving which question a given answer belongs to).
