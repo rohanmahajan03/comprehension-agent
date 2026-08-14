@@ -10,10 +10,20 @@ from app.config import get_settings
 from app.models import Concept, DependencyGraph, Question
 
 
+class SourcePassage(TypedDict):
+    id: str
+    role: str
+    concept_name: str
+    text: str
+
+
 class RawQuestion(TypedDict):
     type: str
     question: str
     expected_answer: str
+    # Ids the model cited; `grounding` is assembled from them in code, never retyped by
+    # the model — see source_passages() for why.
+    source_ids: list[str]
     grounding: str
 
 
@@ -37,9 +47,14 @@ evidence text — do not draw on general knowledge beyond what is stated.
 
 ## Context you will receive
 
-- target_concept: the concept being assessed, with its evidence anchor
-- prerequisites: concepts the target concept depends on, each with their evidence anchor
-- siblings: concepts at the same level as the target concept, each with their evidence anchor
+- target_concept: the concept being assessed (id and name)
+- sources: every evidence passage you may draw on, each with a stable `id`, its `text`,
+  and a `role` saying how it relates to the target concept:
+    - target_concept — the target concept's own evidence
+    - prerequisite — a concept the target depends on
+    - prerequisite_link — the passage justifying why the target depends on that
+      prerequisite
+    - sibling — a concept at the same level as the target
 
 ## Question types
 
@@ -51,8 +66,10 @@ question if the type genuinely fits — it is better to skip a type than to forc
 
 2. conceptual_distinction — ask the student to differentiate the target concept from
    a prerequisite or sibling concept and explain how they relate
-   Appropriate for: when a meaningful contrast exists between the target and a
-   prerequisite or sibling, grounded in the evidence
+   Appropriate for: when the evidence itself establishes the contrast — it compares
+   them, or states how one relates to the other. Two concepts being described
+   separately in different passages is NOT a contrast; skip this type rather than
+   inventing the comparison yourself.
 
 3. enumeration_completeness — ask the student to list all items in a fixed set
    associated with the target concept
@@ -65,8 +82,10 @@ question if the type genuinely fits — it is better to skip a type than to forc
 
 5. applied_reasoning — give the student a scenario and ask them to apply the target
    concept to reason through it
-   Appropriate for: when the evidence describes a mechanism with clear cause-and-effect
-   that can be tested in a novel situation
+   Appropriate for: when the evidence spells out the mechanism — the why behind the
+   behavior — so the reasoning can be carried into a new situation. Skip this type
+   when the evidence states an outcome without the mechanism producing it; there is
+   nothing for the student to reason with.
 
 ## Output format
 
@@ -79,7 +98,7 @@ Return only valid JSON. No preamble, no explanation, no markdown fences.
       "type": "conceptual_correctness | conceptual_distinction | enumeration_completeness | open_ended_example | applied_reasoning",
       "question": "string",
       "expected_answer": "the ideal student response to this question, in prose",
-      "grounding": "the specific evidence text this question is based on"
+      "source_ids": ["id of each source passage this question draws on"]
     }
   ]
 }
@@ -89,25 +108,32 @@ Return only valid JSON. No preamble, no explanation, no markdown fences.
 1. Only generate questions grounded in the provided evidence text.
 2. Do not generate questions about concepts not present in the provided context.
 3. Skip any question type that does not genuinely fit — do not force it.
-4. Questions should be answerable by a student who has only read the provided evidence.
+4. Every question must be fully answerable by a student who has read only the provided
+   evidence and knows nothing else about the topic. It is not enough that the evidence
+   states the fact your question rests on — it must also supply whatever mechanism,
+   comparison, or alternative the answer has to invoke. If the evidence says a hash
+   index cannot serve range queries efficiently but never says why, nor what structure
+   could, then both "why can't it?" and "what would be needed instead?" are out of
+   bounds; ask what the limitation is instead. When in doubt, ask for what the evidence
+   states rather than what it implies.
 5. Each question should target the concept at a level appropriate to its type.
 6. Do not reveal the answer in the question itself.
-7. When evidence spans multiple source passages (e.g. the target concept's own
-   evidence plus a prerequisite's or sibling's), treat each passage as atomic — a
-   passage is everything given for that source, not a single sentence within it.
-   Quote every passage you draw on in full, from start to end: never truncate
-   mid-clause, drop a trailing sentence, or compress/shorten a passage because its
-   content seems to overlap or repeat what another passage you are also quoting
-   already says. Redundancy between passages is never a reason to shorten either
-   one — quote both in full anyway.
-8. Write an `expected_answer`: the ideal student response to your question, written
-   in prose as a strong student would write it. A separate evaluator grades real
-   answers by checking which parts of this one they cover, and it sees only the
-   question, this text, and the student's answer — not the evidence, not the concept
-   graph. So state the substance in full, and never point at something the evaluator
-   cannot see ("as the passage says", "per the evidence above") or describe where the
-   question came from instead of what an answer needs. Derive it strictly from the
-   evidence; never require anything the evidence does not support.
+7. List the id of every source passage your question draws on in `source_ids`. Cite
+   passages by id only — never retype, quote, paraphrase, or summarize their text
+   anywhere in your output. The exact passage text is attached automatically from the
+   ids you cite, so copying it yourself can only introduce errors.
+8. Write an `expected_answer`: the ideal response to your question, in the student's
+   own voice — exactly what the strongest student in the class would write, and nothing
+   a student would not write. That student has never seen these source passages and
+   cannot refer to them, so words like "the evidence", "the passage", "the source", or
+   "the excerpt" must not appear anywhere in it: state the fact itself instead of
+   attributing it. Write "A hash index cannot answer range queries efficiently because
+   it stores no ordering of keys", never "The evidence states that a hash index cannot
+   answer range queries efficiently". A separate evaluator grades real answers by
+   checking which parts of this one they cover, and it sees only the question, this
+   text, and the student's answer — not the sources — so anything you point at rather
+   than state is simply lost. Derive it strictly from the evidence; never require
+   anything the evidence does not support.
 9. Match the expected_answer to the question type. For enumeration_completeness, name
    every item the answer must include — the evaluator cannot check a set it was never
    given. For open_ended_example and applied_reasoning, the correct answer is the
@@ -118,8 +144,7 @@ Return only valid JSON. No preamble, no explanation, no markdown fences.
 ## Input
 
 target_concept: {target_concept}
-prerequisites: {prerequisites}
-siblings: {siblings}"""
+sources: {sources}"""
 
 _OUTPUT_SCHEMA = {
     "type": "json_schema",
@@ -135,9 +160,9 @@ _OUTPUT_SCHEMA = {
                         "type": {"type": "string", "enum": _QUESTION_TYPES},
                         "question": {"type": "string"},
                         "expected_answer": {"type": "string"},
-                        "grounding": {"type": "string"},
+                        "source_ids": {"type": "array", "items": {"type": "string"}},
                     },
-                    "required": ["type", "question", "expected_answer", "grounding"],
+                    "required": ["type", "question", "expected_answer", "source_ids"],
                     "additionalProperties": False,
                 },
             },
@@ -172,8 +197,53 @@ def _client() -> anthropic.Anthropic:
     return anthropic.Anthropic(api_key=get_settings().llm_api_key)
 
 
-def _describe(concept: Concept, evidence: str) -> dict[str, str]:
-    return {"id": concept.id, "name": concept.name, "summary": concept.summary, "evidence": evidence}
+def source_passages(
+    concept: Concept, by_id: dict[str, Concept], graph: DependencyGraph
+) -> list[SourcePassage]:
+    """Every evidence passage available to the LLM for `concept`, each with a stable id.
+
+    The single source of truth for what grounds a question. `_generate_raw_for_concept()`
+    builds its prompt from this list, and the model cites passages by `id` instead of
+    retyping them — so a question's `grounding` is assembled in code from these exact
+    strings and cannot drift from the source. That replaced an earlier design where the
+    model quoted passages back verbatim, which reproducibly corrupted the same sentence
+    (a dropped clause, a mangled em-dash) across runs even at `temperature=0`, and which
+    three rounds of prompt-strengthening failed to make reliable.
+
+    `tests/question_geval` imports this too, so the suite can never disagree with the
+    generator about what was actually sent.
+    """
+    passages: list[SourcePassage] = [
+        {
+            "id": "s1",
+            "role": "target_concept",
+            "concept_name": concept.name,
+            "text": concept.summary,
+        }
+    ]
+
+    def add(role: str, concept_name: str, text: str) -> None:
+        if text:
+            passages.append(
+                {
+                    "id": f"s{len(passages) + 1}",
+                    "role": role,
+                    "concept_name": concept_name,
+                    "text": text,
+                }
+            )
+
+    for dep_id in concept.depends_on:
+        if dep_id not in by_id:
+            continue
+        prereq = by_id[dep_id]
+        add("prerequisite", prereq.name, prereq.summary)
+        # The quote justifying this specific dependency — distinct from the prerequisite's
+        # own summary, and often the sharper anchor for a conceptual_distinction question.
+        add("prerequisite_link", prereq.name, concept.evidence.get(dep_id, ""))
+    for sibling in _siblings_of(concept, graph):
+        add("sibling", sibling.name, sibling.summary)
+    return passages
 
 
 def _siblings_of(target: Concept, graph: DependencyGraph) -> list[Concept]:
@@ -195,15 +265,15 @@ def _generate_raw_for_concept(concept: Concept, by_id: dict[str, Concept], graph
     folds each raw item into a `Question` (dropping `type`, rendering `expected_answer`
     into `expected_answer_notes`) — kept separate so tests/question_geval can grade
     question-type coverage, grounding, and the expected answer directly.
+
+    The model returns `source_ids`, not quoted text; each question's `grounding` is
+    assembled here from the passages those ids name, so it is verbatim by construction.
     """
+    passages = source_passages(concept, by_id, graph)
+    text_by_id = {p["id"]: p["text"] for p in passages}
     payload = {
-        "target_concept": _describe(concept, concept.summary),
-        "prerequisites": [
-            _describe(by_id[dep_id], concept.evidence.get(dep_id, ""))
-            for dep_id in concept.depends_on
-            if dep_id in by_id
-        ],
-        "siblings": [_describe(sibling, sibling.summary) for sibling in _siblings_of(concept, graph)],
+        "target_concept": {"id": concept.id, "name": concept.name},
+        "sources": passages,
     }
     response = _client().messages.create(
         model=_MODEL,
@@ -214,8 +284,14 @@ def _generate_raw_for_concept(concept: Concept, by_id: dict[str, Concept], graph
         output_config={"format": _OUTPUT_SCHEMA},
     )
     text = next(block.text for block in response.content if block.type == "text")
-    data = json.loads(text)
-    return data["questions"]
+    questions: list[RawQuestion] = json.loads(text)["questions"]
+    for q in questions:
+        cited = [sid for sid in q["source_ids"] if sid in text_by_id]
+        # Fall back to the concept's own evidence rather than shipping an unanchored
+        # question if the model cites nothing valid.
+        q["source_ids"] = cited or [passages[0]["id"]]
+        q["grounding"] = "\n\n".join(text_by_id[sid] for sid in q["source_ids"])
+    return questions
 
 
 def generate_questions(graph: DependencyGraph) -> None:
