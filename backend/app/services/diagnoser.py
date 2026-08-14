@@ -22,10 +22,14 @@ from app.models import (
     EvaluationResult,
     Question,
 )
+# Diagnostic questions are graded by the same evaluator as pipeline-1 questions, so they
+# must render their model answer into expected_answer_notes identically.
+from app.services.question_generator import format_answer_notes
 
 
 class RawQuestion(TypedDict):
     question: str
+    expected_answer: str
     grounding: str
 
 
@@ -37,10 +41,6 @@ _JUDGE_MODEL = "claude-haiku-4-5"
 
 # 4 investigative turns + 1 forced-final turn.
 _MAX_TURNS = 5
-
-# Same phrasing question_generator uses, so expected_answer_notes reads consistently to the
-# evaluator regardless of which pipeline produced the question.
-_GROUNDING_PREFIX = "A correct answer is grounded in: "
 
 
 class _ToolError(Exception):
@@ -182,11 +182,24 @@ _SUBMIT_DIAGNOSIS_TOOL = {
             },
             "question_text": {
                 "type": "string",
-                "description": "Required when question_source is 'generated'.",
+                "description": (
+                    "Required when question_source is 'generated'. Copy generate_question's "
+                    "output exactly."
+                ),
+            },
+            "expected_answer": {
+                "type": "string",
+                "description": (
+                    "Required when question_source is 'generated'. Copy generate_question's "
+                    "expected_answer exactly — it is what the evaluator grades against."
+                ),
             },
             "grounding": {
                 "type": "string",
-                "description": "Required when question_source is 'generated'.",
+                "description": (
+                    "Required when question_source is 'generated'. Copy generate_question's "
+                    "grounding exactly."
+                ),
             },
         },
         "required": [
@@ -432,6 +445,7 @@ Return only valid JSON. No preamble, no explanation, no markdown fences.
 
 {
   "question": "string",
+  "expected_answer": "the ideal student response to this question, in prose",
   "grounding": "the evidence text a correct answer is grounded in"
 }
 
@@ -446,7 +460,15 @@ Return only valid JSON. No preamble, no explanation, no markdown fences.
 4. Ask exactly one question. Do not bundle multiple asks into one prompt.
 5. Treat the evidence text as atomic: quote it in the "grounding" field in full, from start to
    end. Never truncate mid-clause or drop a trailing sentence, even if part of it seems
-   redundant."""
+   redundant.
+6. Write an "expected_answer": the ideal student response to your question, in prose, as a
+   strong student would write it. A separate evaluator grades real answers by checking which
+   parts of this one they cover, and it sees only the question, this text, and the student's
+   answer — not the evidence. So state the substance in full and never point at something it
+   cannot see ("matches the evidence"). Derive it strictly from the evidence, and make it
+   target the stated deficiency: a student who writes this answer should not have that gap.
+   If a correct answer is the student's own example or reasoning rather than a restatement,
+   write what any valid answer must demonstrate instead of one specific expected answer."""
 
 _GENERATE_SCHEMA = {
     "type": "json_schema",
@@ -454,16 +476,18 @@ _GENERATE_SCHEMA = {
         "type": "object",
         "properties": {
             "question": {"type": "string"},
+            "expected_answer": {"type": "string"},
             "grounding": {"type": "string"},
         },
-        "required": ["question", "grounding"],
+        "required": ["question", "expected_answer", "grounding"],
         "additionalProperties": False,
     },
 }
 
 
 def _generate_raw_question(concept: Concept, focus: str) -> RawQuestion:
-    """Write one diagnostic question isolating `focus` within `concept`.
+    """Write one diagnostic question isolating `focus` within `concept`, plus the model answer
+    the evaluator will grade real answers against.
 
     Grounded only in the concept's own evidence anchor (its `summary`), which must not leak into
     the question text — it belongs in `expected_answer_notes` for the evaluator, not in the
@@ -483,7 +507,11 @@ def _generate_raw_question(concept: Concept, focus: str) -> RawQuestion:
     )
     text = next(block.text for block in response.content if block.type == "text")
     data = json.loads(text)
-    return {"question": data["question"], "grounding": data["grounding"]}
+    return {
+        "question": data["question"],
+        "expected_answer": data["expected_answer"],
+        "grounding": data["grounding"],
+    }
 
 
 # --- diagnosis assembly -------------------------------------------------------------------
@@ -548,21 +576,24 @@ def _resolve_targeted_question(
             )
 
     prompt = (payload.get("question_text") or "").strip()
+    expected_answer = (payload.get("expected_answer") or "").strip()
     grounding = (payload.get("grounding") or "").strip()
     if not prompt:
         if not is_final:
             raise _ToolError(
-                "Rejected: question_source 'generated' requires question_text (and the "
-                "grounding it is based on). Call generate_question first."
+                "Rejected: question_source 'generated' requires question_text, its "
+                "expected_answer, and the grounding it is based on. Call generate_question "
+                "first."
             )
         raw = _generate_raw_question(suspect, payload.get("evidence_basis", "") or suspect.name)
-        prompt, grounding = raw["question"], raw["grounding"]
+        prompt = raw["question"]
+        expected_answer, grounding = raw["expected_answer"], raw["grounding"]
 
     return Question(
         id=_next_diagnostic_id(suspect),
         concept_id=suspect.id,
         prompt=prompt,
-        expected_answer_notes=f"{_GROUNDING_PREFIX}{grounding or suspect.summary}",
+        expected_answer_notes=format_answer_notes(expected_answer, grounding or suspect.summary),
     )
 
 

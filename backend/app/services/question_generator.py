@@ -13,6 +13,7 @@ from app.models import Concept, DependencyGraph, Question
 class RawQuestion(TypedDict):
     type: str
     question: str
+    expected_answer: str
     grounding: str
 
 
@@ -77,6 +78,7 @@ Return only valid JSON. No preamble, no explanation, no markdown fences.
     {
       "type": "conceptual_correctness | conceptual_distinction | enumeration_completeness | open_ended_example | applied_reasoning",
       "question": "string",
+      "expected_answer": "the ideal student response to this question, in prose",
       "grounding": "the specific evidence text this question is based on"
     }
   ]
@@ -98,6 +100,20 @@ Return only valid JSON. No preamble, no explanation, no markdown fences.
    content seems to overlap or repeat what another passage you are also quoting
    already says. Redundancy between passages is never a reason to shorten either
    one — quote both in full anyway.
+8. Write an `expected_answer`: the ideal student response to your question, written
+   in prose as a strong student would write it. A separate evaluator grades real
+   answers by checking which parts of this one they cover, and it sees only the
+   question, this text, and the student's answer — not the evidence, not the concept
+   graph. So state the substance in full, and never point at something the evaluator
+   cannot see ("as the passage says", "per the evidence above") or describe where the
+   question came from instead of what an answer needs. Derive it strictly from the
+   evidence; never require anything the evidence does not support.
+9. Match the expected_answer to the question type. For enumeration_completeness, name
+   every item the answer must include — the evaluator cannot check a set it was never
+   given. For open_ended_example and applied_reasoning, the correct answer is the
+   student's own novel example or line of reasoning and will NOT appear in the
+   evidence: write what any valid answer has to demonstrate rather than committing to
+   one specific example, so a different-but-correct answer isn't marked wrong.
 
 ## Input
 
@@ -118,9 +134,10 @@ _OUTPUT_SCHEMA = {
                     "properties": {
                         "type": {"type": "string", "enum": _QUESTION_TYPES},
                         "question": {"type": "string"},
+                        "expected_answer": {"type": "string"},
                         "grounding": {"type": "string"},
                     },
-                    "required": ["type", "question", "grounding"],
+                    "required": ["type", "question", "expected_answer", "grounding"],
                     "additionalProperties": False,
                 },
             },
@@ -131,7 +148,23 @@ _OUTPUT_SCHEMA = {
 }
 
 
-_GROUNDING_PREFIX = "A correct answer is grounded in: "
+def format_answer_notes(expected_answer: str, grounding: str) -> str:
+    """Render a question's model answer into the `expected_answer_notes` string
+    `evaluator.py` grades against.
+
+    Deliberately just the prose model answer, with nothing wrapped around it: that is the
+    exact shape `tests/geval` has always fed the evaluator (its `golden_answer` fixtures),
+    so production and the suite that validates it stay the same kind of input. `grounding`
+    is a fallback only — the schema requires an expected_answer, but a source quote is
+    still better than an empty rubric if one ever comes back blank.
+
+    Shared with `diagnoser.py` (whose diagnostic questions the same evaluator grades) so
+    both pipelines hand it one consistent shape.
+    """
+    expected_answer = expected_answer.strip()
+    if expected_answer:
+        return expected_answer
+    return f"A correct answer is grounded in: {grounding.strip()}"
 
 
 @lru_cache
@@ -156,12 +189,12 @@ def _siblings_of(target: Concept, graph: DependencyGraph) -> list[Concept]:
 
 def _generate_raw_for_concept(concept: Concept, by_id: dict[str, Concept], graph: DependencyGraph) -> list[RawQuestion]:
     """Call the LLM for a single concept and return its raw question list as-is
-    (each still carrying its `type` and unwrapped `grounding` quote).
+    (each still carrying its `type`, prose `expected_answer`, and unwrapped `grounding` quote).
 
     Internal seam, not part of the stable public API: `generate_questions()` below
-    folds each raw item into a `Question` (dropping `type`, folding `grounding` into
-    `expected_answer_notes`) — kept separate so tests/question_geval can grade
-    question-type coverage and grounding directly.
+    folds each raw item into a `Question` (dropping `type`, rendering `expected_answer`
+    into `expected_answer_notes`) — kept separate so tests/question_geval can grade
+    question-type coverage, grounding, and the expected answer directly.
     """
     payload = {
         "target_concept": _describe(concept, concept.summary),
@@ -202,7 +235,7 @@ def generate_questions(graph: DependencyGraph) -> None:
                 id=f"{concept.id}:q{i + 1}",
                 concept_id=concept.id,
                 prompt=q["question"],
-                expected_answer_notes=f"{_GROUNDING_PREFIX}{q['grounding']}",
+                expected_answer_notes=format_answer_notes(q["expected_answer"], q["grounding"]),
             )
             for i, q in enumerate(raw_questions)
         ]

@@ -5,7 +5,12 @@ the hand-curated evidence anchors and per-concept applicable question types this
 suite is built from.
 """
 
-from .support import EVIDENCE_BASIS_THRESHOLD, TYPE_RECALL_THRESHOLD, score_case
+from .support import (
+    ANSWER_QUALITY_THRESHOLD,
+    EVIDENCE_BASIS_THRESHOLD,
+    TYPE_RECALL_THRESHOLD,
+    score_case,
+)
 
 
 def test_case3_question_type_recall() -> None:
@@ -16,6 +21,16 @@ def test_case3_question_type_recall() -> None:
 def test_case3_grounding_is_faithful() -> None:
     result = score_case()
     assert not result.grounding_violations, result.grounding_violations_message()
+
+
+def test_case3_expected_answers_are_gradeable() -> None:
+    result = score_case()
+    assert not result.expected_answer_violations, result.expected_answer_violations_message()
+
+
+def test_case3_expected_answers_answer_their_question() -> None:
+    result = score_case()
+    assert result.answer_quality_rate >= ANSWER_QUALITY_THRESHOLD, result.answer_quality_message()
 
 
 def test_case3_questions_are_evidence_based() -> None:

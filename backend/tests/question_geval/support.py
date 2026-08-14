@@ -1,7 +1,8 @@
 """Shared scaffolding for the question_generator regression suite.
 
 Scores the real `question_generator._generate_raw_for_concept()` against the golden
-data in golden.py, per concept, three ways:
+data in golden.py, per concept, five ways — two on the question it writes, two on the
+model answer it writes for that question, and one on the grounding quote behind both:
 
 1. Type-set recall (deterministic, set comparison on the `type` label only) — for
    each concept, does the generator produce every question type that's genuinely
@@ -44,9 +45,31 @@ data in golden.py, per concept, three ways:
    ones matched to a golden reference, since there's no golden reference question
    text anymore.
 
+Checks 4 and 5 cover the *answer* side. `question_generator` doesn't only write
+questions — each one carries an `expected_answer`, the model response that becomes
+`Question.expected_answer_notes` and is the entire rubric `evaluator.py` grades real
+student answers against. A question can be perfectly well-formed and still ship an
+unusable rubric, and until these existed nothing tested that half of the output:
+
+4. Expected-answer gradeability (deterministic, string checks) — catches shapes the
+   evaluator structurally cannot grade against no matter how good the content is:
+   too short to state what an answer contains, deferring to context the evaluator
+   never receives ("as the passage states" — it gets the question, the expected
+   answer, and the student's answer, and nothing else), or a verbatim copy of the
+   `grounding` quote. The last is the regression that motivated the field: before it
+   existed, `expected_answer_notes` *was* the source quote, which says where a
+   question came from rather than what an answer needs.
+5. Answer quality (LLM-judged, `claude-haiku-4-5`) — does the `expected_answer`
+   actually and completely answer its own question, consistent with the evidence and
+   standing on its own for a grader who never sees that evidence? The judge is told
+   two allowances so it doesn't punish correct behavior: describing what any valid
+   answer must demonstrate is right for open_ended_example/applied_reasoning (where
+   the correct answer is the student's own), and closely restating the evidence is
+   right for conceptual_correctness (where the ideal answer largely is that).
+
 score_case() is lru_cache'd so the assertions in test_case3.py share one run (11
-question_generator calls + one evidence-basis judge call per generated question)
-instead of re-running the real API per assertion.
+question_generator calls + two judge calls per generated question — one for evidence
+basis, one for answer quality) instead of re-running the real API per assertion.
 """
 
 from __future__ import annotations
@@ -77,6 +100,21 @@ MIN_TRUNCATION_PREFIX_CHARS = 25
 # Coverage check: below this fraction of grounding's tokens found in the source
 # texts, treat it as fabricated rather than a legitimate paraphrase/connector words.
 TOKEN_COVERAGE_THRESHOLD = 0.7
+# Aggregate pass/fail bar for the fraction of expected_answers judged to actually answer
+# their own question.
+ANSWER_QUALITY_THRESHOLD = 0.9
+# An expected_answer shorter than this can't state what a correct answer contains in any
+# usable way — it's a label, not a model answer.
+MIN_EXPECTED_ANSWER_CHARS = 40
+
+# Prose that defers to context the evaluator never receives. evaluator.py is handed the
+# question, this text, and the student's answer — not the source passage and not the
+# concept graph — so "as the passage states" is an instruction it cannot follow.
+_ANSWER_POINTER_RE = re.compile(
+    r"\b(?:the\s+)?(?:evidence|passage|source\s+text|excerpt|grounding)\b"
+    r"|\bas\s+(?:described|stated|shown|mentioned)\s+(?:above|below|earlier|previously)\b",
+    re.IGNORECASE,
+)
 
 _EVIDENCE_BASIS_JUDGE_MODEL = "claude-haiku-4-5"
 
@@ -182,6 +220,68 @@ def _token_coverage(grounding: str, source_texts: list[str]) -> float:
     return covered / len(g_tokens)
 
 
+_ANSWER_QUALITY_SYSTEM_PROMPT = """You are checking whether a model answer correctly and completely answers its own question.
+
+You will be given EVIDENCE (excerpts about a textbook concept), a QUESTION, and the EXPECTED ANSWER a tutor wrote as the ideal student response to that question. This expected answer is later handed to a grader, which sees only the question, the expected answer, and a real student's answer — never the evidence — and grades by checking which parts of the expected answer the student covered.
+
+An expected answer is good if it (a) actually answers the question that was asked, rather than a related one, (b) is consistent with the evidence and adds nothing the evidence does not support, and (c) stands on its own as a statement of what a correct answer contains, so a grader with no access to the evidence could use it.
+
+An expected answer is NOT good if it answers a different question, contradicts or overreaches the evidence, is too vague to distinguish a correct student answer from a wrong one, or merely describes the topic or where the question came from instead of answering it.
+
+Two specific allowances — do not penalize either:
+- For questions asking for the student's own example or their reasoning about a new scenario, the correct answer is the student's own and cannot be pinned to one specific response. Describing what any valid answer must demonstrate is the right form here, and is good.
+- Restating the evidence closely is fine when the question asks the student to explain the concept, since there the ideal answer largely is the evidence in the student's own words.
+
+Answer only: is this expected answer good per that standard?
+
+Return only valid JSON, no preamble, no markdown fences:
+{"answers_question": <true or false>, "reasoning": "<one sentence>"}"""
+
+_ANSWER_QUALITY_SCHEMA = {
+    "type": "json_schema",
+    "schema": {
+        "type": "object",
+        "properties": {
+            "answers_question": {"type": "boolean"},
+            "reasoning": {"type": "string"},
+        },
+        "required": ["answers_question", "reasoning"],
+        "additionalProperties": False,
+    },
+}
+
+
+def judge_answer_quality(
+    question_text: str, expected_answer: str, evidence_context: str
+) -> tuple[bool, str]:
+    """Ask claude-haiku-4-5 whether `expected_answer` correctly answers `question_text`
+    given `evidence_context`. Returns (answers_question, one-sentence reasoning)."""
+    prompt = (
+        f"EVIDENCE:\n{evidence_context}\n\n"
+        f"QUESTION:\n{question_text}\n\n"
+        f"EXPECTED ANSWER:\n{expected_answer}"
+    )
+    response = _judge_client().messages.create(
+        model=_EVIDENCE_BASIS_JUDGE_MODEL,
+        max_tokens=256,
+        temperature=0,
+        system=_ANSWER_QUALITY_SYSTEM_PROMPT,
+        messages=[{"role": "user", "content": prompt}],
+        output_config={"format": _ANSWER_QUALITY_SCHEMA},
+    )
+    text = next(block.text for block in response.content if block.type == "text")
+    data = json.loads(text)
+    return bool(data["answers_question"]), data["reasoning"]
+
+
+@dataclass(frozen=True)
+class AnswerQualityJudgment:
+    concept_id: str
+    question: RawQuestion
+    answers_question: bool
+    reasoning: str
+
+
 @dataclass(frozen=True)
 class EvidenceBasisJudgment:
     concept_id: str
@@ -197,6 +297,7 @@ class CaseResult:
     raw_by_concept: dict[str, list[RawQuestion]]
     source_texts_by_concept: dict[str, list[str]]
     evidence_basis_judgments: list[EvidenceBasisJudgment]
+    answer_quality_judgments: list[AnswerQualityJudgment]
 
     @property
     def missed_types(self) -> list[tuple[str, str]]:
@@ -248,6 +349,74 @@ class CaseResult:
                         f"({coverage:.2f} < {TOKEN_COVERAGE_THRESHOLD}) in grounding={grounding!r}"
                     )
         return violations
+
+    @property
+    def expected_answer_violations(self) -> list[str]:
+        """Model answers the evaluator structurally cannot grade against.
+
+        Deterministic, no LLM call. `expected_answer` becomes `Question.expected_answer_notes`
+        verbatim (see `question_generator.format_answer_notes`), which evaluator.py labels
+        `RUBRIC:` and grades element by element. So this catches the shapes that leave it
+        with nothing gradeable, regardless of whether the content is otherwise right:
+
+        - too short to state what an answer contains,
+        - deferring to context the evaluator never receives ("as the passage states"),
+        - a verbatim copy of the `grounding` quote. That last one is the exact regression
+          that motivated this field: before it existed, `expected_answer_notes` *was* the
+          source quote, which describes where the question came from rather than what an
+          answer needs. A close paraphrase of the evidence is legitimate (for
+          conceptual_correctness the ideal answer largely is the evidence restated), so
+          this only fires on an exact match after whitespace normalization.
+        """
+        violations = []
+        for concept_id, raws in self.raw_by_concept.items():
+            for q in raws:
+                answer, label = q["expected_answer"].strip(), f"{concept_id} [{q['type']}]"
+                if len(answer) < MIN_EXPECTED_ANSWER_CHARS:
+                    violations.append(
+                        f"{label}: expected_answer is {len(answer)} chars "
+                        f"(< {MIN_EXPECTED_ANSWER_CHARS}): {answer!r}"
+                    )
+                    continue
+                if _ANSWER_POINTER_RE.search(answer):
+                    violations.append(
+                        f"{label}: expected_answer defers to context the evaluator cannot "
+                        f"see: {answer!r}"
+                    )
+                    continue
+                if _normalize_ws(answer) == _normalize_ws(q["grounding"]):
+                    violations.append(
+                        f"{label}: expected_answer is a verbatim copy of grounding — a "
+                        f"source quote, not a model answer: {answer!r}"
+                    )
+        return violations
+
+    def expected_answer_violations_message(self) -> str:
+        return (
+            "generated questions whose expected_answer the evaluator could not grade "
+            "against:\n" + "\n".join(self.expected_answer_violations)
+        )
+
+    @property
+    def unanswered_questions(self) -> list[AnswerQualityJudgment]:
+        return [j for j in self.answer_quality_judgments if not j.answers_question]
+
+    @property
+    def answer_quality_rate(self) -> float:
+        if not self.answer_quality_judgments:
+            return 1.0
+        good = sum(1 for j in self.answer_quality_judgments if j.answers_question)
+        return good / len(self.answer_quality_judgments)
+
+    def answer_quality_message(self) -> str:
+        header = f"answer-quality rate {self.answer_quality_rate:.2f} < {ANSWER_QUALITY_THRESHOLD}"
+        lines = "\n".join(
+            f"  - {j.concept_id} [{j.question['type']}] ({j.reasoning})\n"
+            f"    question: {j.question['question']!r}\n"
+            f"    expected_answer: {j.question['expected_answer']!r}"
+            for j in self.unanswered_questions
+        )
+        return f"{header}\nexpected_answers that don't correctly answer their own question:\n{lines}"
 
     def missed_types_message(self) -> str:
         lines = ", ".join(f"{cid} ({t})" for cid, t in self.missed_types)
@@ -301,10 +470,25 @@ def score_case() -> CaseResult:
         for q in questions
     ]
 
+    answer_quality_judgments = [
+        AnswerQualityJudgment(
+            concept_id,
+            q,
+            *judge_answer_quality(
+                q["question"],
+                q["expected_answer"],
+                " ".join(source_texts_by_concept[concept_id]),
+            ),
+        )
+        for concept_id, questions in raw_by_concept.items()
+        for q in questions
+    ]
+
     return CaseResult(
         case=CASE_3_QUESTIONS,
         graph=graph,
         raw_by_concept=raw_by_concept,
         source_texts_by_concept=source_texts_by_concept,
         evidence_basis_judgments=evidence_basis_judgments,
+        answer_quality_judgments=answer_quality_judgments,
     )
