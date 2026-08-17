@@ -52,5 +52,50 @@ def test_study_session_loop_advances_or_diagnoses() -> None:
         assert len(study_session["history"]) > 0
 
 
+def _answer_until_diagnosis(doc_id: str) -> tuple[str, dict]:
+    """Answer questions until the stub evaluator marks one wrong. Returns (session_id, body)."""
+    study_session = client.post("/api/study-session/start", json={"doc_id": doc_id}).json()
+    for _ in range(4):  # the stub alternates, so a wrong answer arrives within two
+        concept_id = study_session["current_concept_id"]
+        question = client.get(f"/api/questions/{concept_id}").json()[0]
+        body = client.post(
+            f"/api/study-session/{study_session['id']}/answer",
+            json={"question_id": question["id"], "text": "my answer"},
+        ).json()
+        if not body["evaluation"]["correct"]:
+            return study_session["id"], body
+        study_session = body["study_session"]
+    raise AssertionError("stub evaluator never marked an answer incorrect")
+
+
+def test_diagnostic_question_is_registered_in_both_places() -> None:
+    """A generated diagnostic question must land in the store's question index *and* on the
+    graph concept it belongs to.
+
+    Two consumers, two homes: `study_session._find_question` resolves an answered question
+    through the store index, while `diagnoser.pull_question_from_storage` reads
+    `Concept.questions` off the graph. Writing only to the store is the bug this guards —
+    the question would resolve when answered, but be invisible to a later diagnosis of the
+    same concept, so the diagnoser would regenerate a question it already had.
+    """
+    doc_id = _upload_chapter()
+    _, body = _answer_until_diagnosis(doc_id)
+
+    targeted = body["diagnosis"]["targeted_question"]
+    suspect_id = body["diagnosis"]["suspected_gap_concept_id"]
+
+    stored = client.get(f"/api/questions/{suspect_id}").json()
+    assert any(q["id"] == targeted["id"] for q in stored), (
+        f"targeted question missing from the store's index for {suspect_id}"
+    )
+
+    graph = client.get(f"/api/graph/{doc_id}").json()
+    suspect = next(c for c in graph["concepts"] if c["id"] == suspect_id)
+    assert any(q["id"] == targeted["id"] for q in suspect["questions"]), (
+        f"targeted question missing from {suspect_id}'s questions on the graph — a later "
+        "diagnosis of this concept would not see it as a reuse candidate"
+    )
+
+
 def test_graph_404_for_unknown_doc() -> None:
     assert client.get("/api/graph/does-not-exist").status_code == 404

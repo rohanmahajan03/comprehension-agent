@@ -8,6 +8,7 @@ docs/specs/2026-08-10-diagnoser-agentic-pipeline-design.md for the design ration
 """
 
 import json
+from dataclasses import dataclass
 from functools import lru_cache
 from typing import Any, TypedDict
 
@@ -31,6 +32,22 @@ class RawQuestion(TypedDict):
     question: str
     expected_answer: str
     grounding: str
+
+
+@dataclass(frozen=True)
+class DiagnosisTrace:
+    """How a diagnosis was reached — see `_diagnose_with_trace()`."""
+
+    turns_used: int
+    tool_calls: list[tuple[str, dict[str, Any]]]
+    #: submit_diagnosis payloads the certainty gate refused
+    rejected_submissions: list[dict[str, Any]]
+    #: concept ids passed to get_prereqs, in order — the investigation path
+    concepts_inspected: list[str]
+    #: whether the accepted submission was the forced one on the last turn
+    forced_final: bool
+    #: whether the diagnosis fell back to general knowledge (see system prompt rule 3)
+    gap_outside_graph: bool = False
 
 
 _ORCHESTRATOR_MODEL = "claude-sonnet-4-6"
@@ -60,8 +77,12 @@ concept the student does not understand, and produce a question that isolates it
 
 1. Read the evaluator's finding. That is the deficiency: what the answer failed to show.
 2. Use `get_prereqs` to see what the answered concept depends on, along with the source-text
-   evidence justifying each dependency. Call it again on a prerequisite's own id to walk further
-   down the chain — the root gap is often deeper than one hop.
+   evidence justifying each dependency. That first call very often already returns the passage
+   that explains what the student got wrong — when it does, you have your suspect and you are
+   done investigating. Call `get_prereqs` again on a prerequisite's own id only when the
+   evidence you already hold does NOT explain the deficiency. The root gap is sometimes deeper
+   than one hop, but walking deeper after you can already name the gap costs a turn, changes
+   nothing, and leaves you without the turns you need for steps 3 and 4.
 3. Once you have a candidate suspect and can state the deficiency in terms of that concept, use
    `pull_question_from_storage` to check whether a question targeting it already exists. If
    nothing targets it, use `generate_question` to create one.
@@ -76,17 +97,29 @@ A submission below "high" confidence will be rejected and you will have to conti
 
 ## Budget
 
-You have a limited number of turns, and each tool call costs one. Spend them investigating
-rather than restating. On your final turn you will be required to submit your best diagnosis
-whatever its confidence, so do not leave yourself with nothing to submit.
+You have a limited number of turns and each tool call costs one, including the calls that
+select or write the question. Stop investigating the moment you can meet the certainty bar
+above: a probe that does not change your answer is pure waste. Reaching the correct diagnosis
+in two turns is strictly better than reaching the same diagnosis in four — it is not a
+shortcut, it is the goal. On your final turn you will be forced to submit whatever you have,
+so never let it come to that by choice.
 
 ## Rules
 
 1. Never reveal the answer in the question you select or generate. Probing a concept means
    asking the student to demonstrate it, not showing them what the source text says about it.
-2. Only diagnose concepts that appear in the graph. If the answered concept has no
-   prerequisites, it is itself the root gap — diagnose it.
-3. Base your diagnosis on the evaluator's finding, not on your own re-grading of the answer."""
+2. Prefer a concept from the graph. If the answered concept has no prerequisites of its
+   own, it is itself the root gap — diagnose it.
+3. Occasionally no concept in the graph explains the deficiency at all: what the student is
+   missing is background knowledge the source material simply never teaches. When that is
+   genuinely the case — not merely when the fit is imperfect — say so rather than forcing
+   the blame onto a prerequisite that does not deserve it. Set `gap_is_outside_graph` to
+   true, still set `suspected_gap_concept_id` to whichever graph concept the gap sits
+   closest to, and name the missing background plainly in your reasoning. Your question may
+   then draw on general knowledge: pass `allow_general_knowledge` to `generate_question`.
+   This path is rare. Exhaust the graph first, and do not reach for it merely because the
+   deficiency spans several prerequisites.
+4. Base your diagnosis on the evaluator's finding, not on your own re-grading of the answer."""
 
 _GET_PREREQS_TOOL = {
     "name": "get_prereqs",
@@ -146,6 +179,13 @@ _GENERATE_QUESTION_TOOL = {
                     "missing or wrong."
                 ),
             },
+            "allow_general_knowledge": {
+                "type": "boolean",
+                "description": (
+                    "Set true only alongside a gap_is_outside_graph diagnosis, to let the "
+                    "question go beyond what the source material states."
+                ),
+            },
         },
         "required": ["concept_id", "focus"],
     },
@@ -173,6 +213,14 @@ _SUBMIT_DIAGNOSIS_TOOL = {
                 "description": (
                     "The specific element from the evaluator's finding and the specific wording "
                     "in the suspect's evidence that connect them."
+                ),
+            },
+            "gap_is_outside_graph": {
+                "type": "boolean",
+                "description": (
+                    "True only when no concept in the graph explains the deficiency and the "
+                    "diagnosis rests on general background knowledge instead. This is "
+                    "surfaced to the student, so do not set it for a merely imperfect fit."
                 ),
             },
             "question_source": {"type": "string", "enum": ["storage", "generated"]},
@@ -255,10 +303,34 @@ def diagnose(
     carries "high" confidence, except on the final turn, where a submission is forced and
     accepted at whatever confidence it comes back with.
     """
+    result, _ = _diagnose_with_trace(concept, graph, question, answer, evaluation)
+    return result
+
+
+def _diagnose_with_trace(
+    concept: Concept,
+    graph: DependencyGraph,
+    question: Question,
+    answer: Answer,
+    evaluation: EvaluationResult,
+) -> tuple[DiagnosisResult, DiagnosisTrace]:
+    """`diagnose()` plus a record of how it got there.
+
+    Internal seam, not part of the stable public API — the same pattern as
+    `graph_builder._extract_raw_graph()` and `question_generator._generate_raw_for_concept()`.
+    Most of this service's contract is trajectory rather than output: that it investigated
+    before concluding, that the certainty gate actually held, that it stayed inside its
+    budget. None of that is visible in the returned `DiagnosisResult`, so without this seam
+    a diagnosis that burned five turns and three rejected submissions is indistinguishable
+    from a clean first-turn hit — in tests and in production logs alike.
+    """
     by_id = {c.id: c for c in graph.concepts}
     messages: list[dict[str, Any]] = [
         {"role": "user", "content": _opening_prompt(concept, question, answer, evaluation)}
     ]
+    tool_calls: list[tuple[str, dict[str, Any]]] = []
+    rejected_submissions: list[dict[str, Any]] = []
+    concepts_inspected: list[str] = []
 
     for turn in range(_MAX_TURNS):
         is_final = turn == _MAX_TURNS - 1
@@ -285,11 +357,25 @@ def diagnose(
         for block in response.content:
             if block.type != "tool_use":
                 continue
+            tool_calls.append((block.name, block.input))
+            if block.name == "get_prereqs":
+                concepts_inspected.append(block.input.get("concept_id", ""))
             if block.name == "submit_diagnosis":
                 try:
-                    return _accept_diagnosis(block.input, concept, by_id, is_final)
+                    result = _accept_diagnosis(block.input, concept, by_id, is_final)
                 except _ToolError as exc:
+                    rejected_submissions.append(block.input)
                     tool_results.append(_error_result(block.id, str(exc)))
+                else:
+                    trace = DiagnosisTrace(
+                        turns_used=turn + 1,
+                        tool_calls=tool_calls,
+                        rejected_submissions=rejected_submissions,
+                        concepts_inspected=concepts_inspected,
+                        forced_final=is_final,
+                        gap_outside_graph=bool(block.input.get("gap_is_outside_graph")),
+                    )
+                    return result, trace
                 continue
             tool_results.append(_run_tool(block.id, block.name, block.input, by_id))
 
@@ -314,7 +400,12 @@ def _run_tool(
         elif name == "pull_question_from_storage":
             result = _pull_question_from_storage(payload["concept_id"], payload["focus"], by_id)
         elif name == "generate_question":
-            result = _generate_question(payload["concept_id"], payload["focus"], by_id)
+            result = _generate_question(
+                payload["concept_id"],
+                payload["focus"],
+                by_id,
+                bool(payload.get("allow_general_knowledge")),
+            )
         else:
             raise _ToolError(f"Unknown tool '{name}'.")
     except _ToolError as exc:
@@ -371,9 +462,14 @@ def _pull_question_from_storage(
     return {"match": {"id": match.id, "prompt": match.prompt}}
 
 
-def _generate_question(concept_id: str, focus: str, by_id: dict[str, Concept]) -> RawQuestion:
+def _generate_question(
+    concept_id: str,
+    focus: str,
+    by_id: dict[str, Concept],
+    allow_general_knowledge: bool = False,
+) -> RawQuestion:
     target = _resolve(concept_id, by_id)
-    return _generate_raw_question(target, focus)
+    return _generate_raw_question(target, focus, allow_general_knowledge)
 
 
 # --- nested LLM calls ---------------------------------------------------------------------
@@ -485,7 +581,19 @@ _GENERATE_SCHEMA = {
 }
 
 
-def _generate_raw_question(concept: Concept, focus: str) -> RawQuestion:
+_GENERAL_KNOWLEDGE_ADDENDUM = """
+
+## Override for this request
+
+The gap being probed is background knowledge the source material never teaches, so rules 1
+and 5 above do not apply here: draw on general knowledge of the subject, and put a short
+plain-language statement of the background being tested in "grounding" instead of a quote.
+Everything else still holds — one question, no giveaway, targeted at the stated deficiency."""
+
+
+def _generate_raw_question(
+    concept: Concept, focus: str, allow_general_knowledge: bool = False
+) -> RawQuestion:
     """Write one diagnostic question isolating `focus` within `concept`, plus the model answer
     the evaluator will grade real answers against.
 
@@ -497,11 +605,14 @@ def _generate_raw_question(concept: Concept, focus: str) -> RawQuestion:
         "concept": {"id": concept.id, "name": concept.name, "evidence": concept.summary},
         "deficiency": focus,
     }
+    system = _GENERATE_SYSTEM_PROMPT + (
+        _GENERAL_KNOWLEDGE_ADDENDUM if allow_general_knowledge else ""
+    )
     response = _client().messages.create(
         model=_GENERATOR_MODEL,
         max_tokens=1024,
         temperature=0,
-        system=_GENERATE_SYSTEM_PROMPT,
+        system=system,
         messages=[{"role": "user", "content": json.dumps(payload)}],
         output_config={"format": _GENERATE_SCHEMA},
     )
@@ -609,9 +720,24 @@ def _next_diagnostic_id(suspect: Concept) -> str:
     return f"{prefix}{taken + 1}"
 
 
+_OUTSIDE_GRAPH_NOTICE = (
+    "Note: no prerequisite in this chapter accounts for the gap, so the diagnosis below "
+    "draws on general background knowledge rather than the chapter's own material."
+)
+
+
 def _fold_reasoning(payload: dict[str, Any]) -> str:
-    """Flatten the submission into the single `reasoning` string DiagnosisResult carries."""
-    parts = [payload.get("reasoning", "").strip()]
+    """Flatten the submission into the single `reasoning` string DiagnosisResult carries.
+
+    `reasoning` is surfaced to the student through the answer endpoint, so it is also where
+    a diagnosis discloses that it left the source material — leading with the notice rather
+    than burying it, since a student should know when they are being told something the
+    chapter never claimed.
+    """
+    parts = []
+    if payload.get("gap_is_outside_graph"):
+        parts.append(_OUTSIDE_GRAPH_NOTICE)
+    parts.append(payload.get("reasoning", "").strip())
     basis = payload.get("evidence_basis", "").strip()
     if basis:
         parts.append(f"Evidence: {basis}")
