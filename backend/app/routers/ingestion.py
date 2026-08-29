@@ -29,12 +29,21 @@ def upload_textbook(payload: TextbookUpload) -> TextbookUploadResponse:
     doc_id = uuid.uuid4().hex[:12]
     store.save_document(doc_id, payload.text)
 
-    # Synchronous for now; move to a background task/queue once graph building
-    # involves real LLM calls.
-    graph = graph_builder.build_graph(doc_id, payload.text)
-    question_generator.generate_questions(graph)  # populates concept.questions in place
-    store.save_graph(graph)
-    for concept in graph.concepts:
-        store.save_questions(concept.id, concept.questions)
+    # The document has to be persisted first — concepts reference it by foreign key — but
+    # everything after it can fail (both steps are real LLM calls). Without this rollback a
+    # failure strands a document row with no concepts, invisible to the app but permanent in
+    # the database. Deleting the document cascades away any partial graph/questions too, so
+    # a failed upload leaves no trace and the client is free to just retry.
+    try:
+        # Synchronous for now; move to a background task/queue once graph building
+        # involves real LLM calls.
+        graph = graph_builder.build_graph(doc_id, payload.text)
+        question_generator.generate_questions(graph)  # populates concept.questions in place
+        store.save_graph(graph)
+        for concept in graph.concepts:
+            store.save_questions(concept.id, concept.questions)
+    except Exception:
+        store.delete_document(doc_id)
+        raise
 
     return TextbookUploadResponse(doc_id=doc_id)

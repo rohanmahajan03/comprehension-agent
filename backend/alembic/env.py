@@ -18,9 +18,13 @@ config = context.config
 config.set_main_option("sqlalchemy.url", get_settings().database_url)
 
 # Interpret the config file for Python logging.
-# This line sets up loggers basically.
+# disable_existing_loggers=False is load-bearing: main.py runs migrations in-process from
+# the lifespan hook, and fileConfig's default (True) disables every logger not named in
+# alembic.ini's [loggers] — which includes uvicorn, uvicorn.error, and uvicorn.access.
+# Leaving it at the default silently kills all backend logging for the life of the server:
+# no access lines and no tracebacks, so any 500 looks like it never happened.
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 target_metadata = Base.metadata
 

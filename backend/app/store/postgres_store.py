@@ -62,6 +62,14 @@ class PostgresStore(Store):
             row = session.get(DocumentRow, doc_id)
             return row.text if row else None
 
+    def delete_document(self, doc_id: str) -> None:
+        """One statement is a full cleanup: concepts, questions, and study sessions all
+        reach `documents` through ON DELETE CASCADE (app/db/models.py), so the database
+        removes everything derived from the document. Deleting an unknown id is a no-op.
+        """
+        with session_scope() as session:
+            session.execute(delete(DocumentRow).where(DocumentRow.id == doc_id))
+
     def save_graph(self, graph: DependencyGraph) -> None:
         """Upsert every concept row. Never touches `questions` — see module docstring."""
         with session_scope() as session:

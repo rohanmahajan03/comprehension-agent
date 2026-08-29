@@ -19,6 +19,17 @@ class Store(ABC):
     @abstractmethod
     def get_document(self, doc_id: str) -> str | None: ...
 
+    @abstractmethod
+    def delete_document(self, doc_id: str) -> None:
+        """Drop a document and everything derived from it (graph, concepts, questions).
+
+        Exists so a failed ingestion can roll itself back: `routers/ingestion.py` must
+        persist the document before `build_graph()` can reference it by FK, so an LLM
+        failure mid-pipeline would otherwise strand a document row with no concepts.
+        Idempotent — deleting an unknown doc_id is not an error.
+        """
+        ...
+
     # --- dependency graphs ---
     @abstractmethod
     def save_graph(self, graph: DependencyGraph) -> None: ...
@@ -53,6 +64,19 @@ class InMemoryStore(Store):
 
     def get_document(self, doc_id: str) -> str | None:
         return self._documents.get(doc_id)
+
+    def delete_document(self, doc_id: str) -> None:
+        """Hand-rolled equivalent of the ON DELETE CASCADE PostgresStore gets for free.
+        Questions are keyed by concept id, not doc id, so they're found via the id
+        convention (`{doc_id}:{slug}` for concepts, `{concept_id}:{suffix}` for questions)
+        rather than by walking the graph — that way a partially-built graph, or one that
+        was never saved, still cleans up completely.
+        """
+        self._documents.pop(doc_id, None)
+        self._graphs.pop(doc_id, None)
+        prefix = f"{doc_id}:"
+        for concept_id in [cid for cid in self._questions if cid.startswith(prefix)]:
+            del self._questions[concept_id]
 
     def save_graph(self, graph: DependencyGraph) -> None:
         self._graphs[graph.doc_id] = graph

@@ -1,8 +1,11 @@
 """End-to-end walk through both pipelines against the stub services."""
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
+from app.services import graph_builder
+from app.store import get_store
 
 client = TestClient(app)
 
@@ -99,3 +102,34 @@ def test_diagnostic_question_is_registered_in_both_places() -> None:
 
 def test_graph_404_for_unknown_doc() -> None:
     assert client.get("/api/graph/does-not-exist").status_code == 404
+
+
+def test_failed_ingestion_leaves_no_orphan_document(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A mid-pipeline failure must roll the document back rather than strand it.
+
+    `upload_textbook` has to save the document before building the graph (concepts
+    reference it by FK), so a failing LLM call would otherwise leave a document row with
+    no concepts — invisible to the app, permanent in the database. The spy captures the
+    generated doc_id, which is otherwise unobservable when the request fails.
+    """
+    store = get_store()
+
+    def _failing_build_graph(doc_id: str, text: str):
+        raise RuntimeError("simulated LLM failure")
+
+    monkeypatch.setattr(graph_builder, "build_graph", _failing_build_graph)
+
+    deleted: list[str] = []
+    real_delete = store.delete_document
+
+    def _spy_delete(doc_id: str) -> None:
+        deleted.append(doc_id)
+        real_delete(doc_id)
+
+    monkeypatch.setattr(store, "delete_document", _spy_delete)
+
+    with pytest.raises(RuntimeError, match="simulated LLM failure"):
+        client.post("/api/textbook", json={"text": "A sample chapter about calculus."})
+
+    assert deleted, "failed ingestion did not attempt to clean up its document"
+    assert store.get_document(deleted[0]) is None, "document survived the rollback"

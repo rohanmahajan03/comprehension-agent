@@ -4,21 +4,30 @@ version = "0.1.0"
 description = "Backend for the adaptive concept tutor: ingestion, dependency graph, questions, diagnostic session loop"
 requires-python = ">=3.11"
 dependencies = [
-    "fastapi>=0.115",
-    "uvicorn[standard]>=0.30",
-    "pydantic>=2.7",
-    "pydantic-settings>=2.3",
-    "anthropic>=0.69",
-    "sqlalchemy>=2.0",
-    "alembic>=1.13",
-    "psycopg[binary]>=3.1",
+    # Every range is capped at the next major. uv.lock is what actually pins the build
+    # (transitives included); these bounds are the declared intent — they keep `uv lock`
+    # from silently resolving across a major boundary when someone regenerates it.
+    "fastapi>=0.115,<1.0",
+    "uvicorn[standard]>=0.30,<1.0",
+    "pydantic>=2.7,<3.0",
+    "pydantic-settings>=2.3,<3.0",
+    # Upper bound is load-bearing: anthropic 1.0 removed temperature/top_p/top_k from
+    # Messages.create()'s signature entirely, so `temperature=0` raises TypeError before
+    # a request is sent. All four services and all four geval judges pass temperature=0
+    # for determinism (11 call sites), and the API still accepts it on the models used
+    # here (claude-haiku-4-5, claude-sonnet-4-6) — this is purely an SDK-side removal.
+    # Dropping the bound means migrating those call sites and recalibrating the suites.
+    "anthropic>=0.69,<1.0",
+    "sqlalchemy>=2.0,<3.0",
+    "alembic>=1.13,<2.0",
+    "psycopg[binary]>=3.1,<4.0",
 ]
 
 [project.optional-dependencies]
 dev = [
-    "pytest>=8.0",
-    "httpx>=0.27",
-    "deepeval>=4.1",
+    "pytest>=8.0,<9.0",
+    "httpx>=0.27,<1.0",
+    "deepeval>=4.1,<5.0",
 ]
 
 [build-system]
