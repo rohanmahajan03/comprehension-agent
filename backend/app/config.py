@@ -10,6 +10,9 @@ class Settings(BaseSettings):
     debug: bool = False
     cors_origins: str = "http://localhost:5173"
     llm_api_key: str = ""
+    # Empty = InMemoryStore (tests, and any environment without a real database).
+    # Set = PostgresStore. See app/store/__init__.py's get_store().
+    database_url: str = ""
 
     @property
     def cors_origin_list(self) -> list[str]:

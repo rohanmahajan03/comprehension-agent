@@ -109,16 +109,15 @@ def submit_answer(study_session_id: str, answer: Answer) -> AnswerResponse:
                 status_code=404, detail=f"Unknown concept '{question.concept_id}'"
             )
         diagnosis = diagnoser.diagnose(concept, graph, question, answer, evaluation)
-        # Register the targeted question so the answer to it can be resolved later, and mirror
-        # it onto the graph so a later diagnosis of the same concept can find it as a candidate.
+        # Register the targeted question so the answer to it can be resolved later. Both
+        # Store implementations reconstruct Concept.questions from this same index on every
+        # get_graph() call (see docs/specs/2026-08-21-persistent-storage-design.md §3), so a
+        # later diagnosis of this concept sees it as a reuse candidate without any further
+        # write here.
         targeted = diagnosis.targeted_question
         existing = store.get_questions(targeted.concept_id) or []
         if all(q.id != targeted.id for q in existing):
             store.save_questions(targeted.concept_id, [*existing, targeted])
-            suspect = by_id.get(targeted.concept_id)
-            if suspect is not None and all(q.id != targeted.id for q in suspect.questions):
-                suspect.questions.append(targeted)
-                store.save_graph(graph)
         study_session.status = StudySessionStatus.DIAGNOSING
         next_question = targeted
 

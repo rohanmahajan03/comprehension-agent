@@ -1,4 +1,21 @@
 services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      - POSTGRES_USER=comprehension_agent
+      - POSTGRES_PASSWORD=devpassword
+      - POSTGRES_DB=comprehension_agent
+    ports:
+      # Host port 5433, not 5432 — avoids colliding with a locally-installed Postgres.
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U comprehension_agent -d comprehension_agent"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
   backend:
     build:
       context: ./backend
@@ -7,6 +24,14 @@ services:
       - "8000:8000"
     env_file:
       - .env
+    environment:
+      # Overrides whatever DATABASE_URL is in .env (that value is for native/host use,
+      # pointing at localhost:5433 — see .env.example). Inside the compose network,
+      # `postgres` is reachable by service name on its container-internal port 5432.
+      - DATABASE_URL=postgresql+psycopg://comprehension_agent:devpassword@postgres:5432/comprehension_agent
+    depends_on:
+      postgres:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
       interval: 10s
@@ -21,3 +46,6 @@ services:
       - "5173:80"
     depends_on:
       - backend
+
+volumes:
+  postgres_data:
