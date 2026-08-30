@@ -325,6 +325,68 @@ def test_history_resave_preserves_order_and_grows(store: PostgresStore) -> None:
     assert [e.answer.text for e in final.history] == ["first", "second"]
 
 
+def test_delete_document_cascades_to_everything_derived_from_it() -> None:
+    """The cascade `delete_document` relies on, encoded rather than assumed.
+
+    `PostgresStore.delete_document` issues a single DELETE and depends on ON DELETE CASCADE
+    to remove concepts, questions, study sessions, and history entries. It runs on the
+    ingestion failure path (routers/ingestion.py), so if an FK ever loses its `ondelete`,
+    failed uploads silently start leaving orphaned documents again — the bug the rollback
+    was added to fix.
+    """
+    store = PostgresStore()
+    store.save_document("doomed", "text", "Doomed")
+    store.save_document("keeper", "text", "Keeper")
+    store.save_graph(
+        DependencyGraph(doc_id="doomed", concepts=[Concept(id="doomed:a", name="A", summary="s")])
+    )
+    store.save_graph(
+        DependencyGraph(doc_id="keeper", concepts=[Concept(id="keeper:a", name="A", summary="s")])
+    )
+    doomed_question = Question(
+        id="doomed:a:q1", concept_id="doomed:a", prompt="p", expected_answer_notes="n"
+    )
+    store.save_questions("doomed:a", [doomed_question])
+    store.save_questions(
+        "keeper:a",
+        [Question(id="keeper:a:q1", concept_id="keeper:a", prompt="p", expected_answer_notes="n")],
+    )
+    study_session = StudySession(id="doomed_sess", doc_id="doomed", current_concept_id="doomed:a")
+    study_session.history.append(
+        HistoryEntry(
+            question=doomed_question,
+            answer=Answer(question_id=doomed_question.id, text="a"),
+            evaluation=EvaluationResult(correct=True, explanation="e"),
+            diagnosis=None,
+        )
+    )
+    store.save_study_session(study_session)
+
+    store.delete_document("doomed")
+
+    assert store.get_document("doomed") is None
+    assert store.get_graph("doomed") is None
+    assert store.get_questions("doomed:a") is None
+    assert store.get_study_session("doomed_sess") is None
+    with get_engine().begin() as conn:
+        remaining = conn.execute(
+            text("select count(*) from history_entries where study_session_id = 'doomed_sess'")
+        ).scalar_one()
+    assert remaining == 0, "history entries must go with their session"
+
+    # The neighbouring document is untouched — the cascade is scoped, not a wipe.
+    assert store.get_document("keeper") == "text"
+    assert store.get_questions("keeper:a") is not None
+
+
+def test_delete_document_is_a_noop_for_an_unknown_id() -> None:
+    """Called on the ingestion failure path, where the document may never have been written."""
+    store = PostgresStore()
+    store.save_document("kept", "text")
+    store.delete_document("never-existed")
+    assert store.get_document("kept") == "text"
+
+
 def test_list_unfinished_sessions_joins_title_and_counts_concepts() -> None:
     """The list query's join and correlated count, against a real database.
 

@@ -11,6 +11,28 @@ jobs:
     defaults:
       run:
         working-directory: backend
+    services:
+      # Without a database, tests/test_postgres_store.py skips — which is how its whole
+      # suite silently stopped running. The database is named with the `_test` suffix the
+      # suite's own guard requires; POSTGRES_DB creates it directly, so the compose
+      # init script isn't involved here.
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: comprehension_agent
+          POSTGRES_PASSWORD: devpassword
+          POSTGRES_DB: comprehension_agent_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U comprehension_agent -d comprehension_agent_test"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      # TEST_DATABASE_URL, never DATABASE_URL: the latter would also point the *app* at this
+      # database, and the suite deliberately refuses to run off it. See the suite docstring.
+      TEST_DATABASE_URL: postgresql+psycopg://comprehension_agent:devpassword@localhost:5432/comprehension_agent_test
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -24,6 +46,9 @@ jobs:
       # pyproject.toml, so a dependency edit can't merge without its regenerated lock.
       # --frozen would install from the lock without ever checking it, and pass.
       - run: uv sync --locked --extra dev
+      # The suite expects an already-migrated database. This is also the only place the
+      # migrations themselves get exercised in CI.
+      - run: DATABASE_URL=$TEST_DATABASE_URL uv run alembic upgrade head
       - run: uv run pytest
 
   frontend-build:
