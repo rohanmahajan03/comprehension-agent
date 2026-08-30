@@ -3,7 +3,8 @@ import type {
   AnswerResponse,
   DependencyGraph,
   Question,
-  StudySession,
+  StudySessionDetail,
+  StudySessionSummary,
 } from '../types'
 
 // Same-origin by default; vite's dev server proxies /api to the backend.
@@ -36,11 +37,21 @@ export function getQuestions(conceptId: string): Promise<Question[]> {
   return request(`/api/questions/${encodeURIComponent(conceptId)}`)
 }
 
-export function startStudySession(docId: string): Promise<StudySession> {
+export function startStudySession(docId: string): Promise<StudySessionDetail> {
   return request('/api/study-session/start', {
     method: 'POST',
     body: JSON.stringify({ doc_id: docId }),
   })
+}
+
+// Unfinished sessions only, most recently updated first. Completed ones are filtered out
+// server-side — they can't be continued, so the list empties itself as work finishes.
+export function listStudySessions(): Promise<StudySessionSummary[]> {
+  return request('/api/study-session')
+}
+
+export function getStudySession(studySessionId: string): Promise<StudySessionDetail> {
+  return request(`/api/study-session/${encodeURIComponent(studySessionId)}`)
 }
 
 export function submitAnswer(studySessionId: string, answer: Answer): Promise<AnswerResponse> {

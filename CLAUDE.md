@@ -29,9 +29,14 @@ cd backend && set -a && source ../.env && set +a && .venv/bin/alembic revision -
 # suites and test_postgres_store.py auto-skip)
 cd backend && .venv/bin/pytest
 
-# PostgresStore regression suite (real Postgres, no LLM calls — see Testing below)
+# PostgresStore regression suite (real Postgres, no LLM calls — see Testing below).
+# ⚠️ DESTRUCTIVE: truncates all five tables before every test. It reads TEST_DATABASE_URL,
+# never DATABASE_URL, and refuses any database whose name doesn't end in `_test` — so it
+# cannot reach the working database. Point it anywhere else and it fails loudly.
 docker compose up -d postgres
-cd backend && set -a && source ../.env && set +a && .venv/bin/pytest tests/test_postgres_store.py -v
+export TEST_DATABASE_URL=postgresql+psycopg://comprehension_agent:devpassword@localhost:5433/comprehension_agent_test
+cd backend && DATABASE_URL=$TEST_DATABASE_URL .venv/bin/alembic upgrade head   # once, to create the schema
+cd backend && .venv/bin/pytest tests/test_postgres_store.py -v
 
 # G-Eval regression suite for evaluator.py (real, billed Anthropic API calls — see Testing below)
 cd backend && set -a && source ../.env && set +a && .venv/bin/pytest tests/geval -v

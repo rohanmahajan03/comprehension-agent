@@ -5,7 +5,9 @@ doc, docs/specs/2026-08-21-persistent-storage-design.md §5): PostgresStore is t
 that converts between the two. No SQLAlchemy type crosses the Store interface.
 """
 
-from sqlalchemy import ForeignKey, UniqueConstraint
+from datetime import datetime
+
+from sqlalchemy import DateTime, ForeignKey, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -17,6 +19,10 @@ class DocumentRow(Base):
 
     id: Mapped[str] = mapped_column(primary_key=True)
     text: Mapped[str]
+    # Nullable: rows created before this column existed genuinely have no title, and the
+    # upload field it comes from is itself optional. The client renders a text snippet
+    # when it's NULL rather than the API inventing a label.
+    title: Mapped[str | None]
 
 
 class ConceptRow(Base):
@@ -55,6 +61,15 @@ class StudySessionRow(Base):
     doc_id: Mapped[str] = mapped_column(ForeignKey("documents.id", ondelete="CASCADE"))
     current_concept_id: Mapped[str | None]
     status: Mapped[str]
+    # server_default backfills rows that predate these columns. Both are written explicitly
+    # by PostgresStore.save_study_session (created_at on insert only, updated_at on every
+    # write) so the value matches what InMemoryStore produces and tests can assert on it.
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
 
     history: Mapped[list["HistoryEntryRow"]] = relationship(
         back_populates="study_session",

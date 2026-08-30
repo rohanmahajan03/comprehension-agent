@@ -1,0 +1,11 @@
+-- Runs once, on first initialization of the postgres volume.
+--
+-- tests/test_postgres_store.py TRUNCATEs every table before each test, so it must never be
+-- able to reach the working database. It refuses to run unless TEST_DATABASE_URL names a
+-- database whose name ends in `_test`; this creates that database so the suite has
+-- somewhere safe to point.
+--
+-- Existing volumes won't re-run this file. To add the database to one that already exists:
+--   docker compose exec postgres psql -U comprehension_agent -d postgres \
+--     -c "CREATE DATABASE comprehension_agent_test OWNER comprehension_agent;"
+CREATE DATABASE comprehension_agent_test OWNER comprehension_agent;

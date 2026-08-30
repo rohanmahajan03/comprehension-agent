@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { getGraph, getQuestions, startStudySession, submitAnswer } from '../api/client'
+import { getGraph, getStudySession, startStudySession, submitAnswer } from '../api/client'
 import { QuestionCard } from '../components/QuestionCard'
 import type {
   AnswerResponse,
@@ -10,10 +10,12 @@ import type {
 
 interface Props {
   docId: string
+  /** Resume this session instead of starting a new one. */
+  sessionId?: string
   onExit: () => void
 }
 
-export function StudySessionPage({ docId, onExit }: Props) {
+export function StudySessionPage({ docId, sessionId, onExit }: Props) {
   const [studySession, setStudySession] = useState<StudySession | null>(null)
   const [graph, setGraph] = useState<DependencyGraph | null>(null)
   const [question, setQuestion] = useState<Question | null>(null)
@@ -22,27 +24,30 @@ export function StudySessionPage({ docId, onExit }: Props) {
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    // `cancelled` guards against setting state from a stale request if `docId`
-    // changes (or the component unmounts) before this resolves.
+    // `cancelled` guards against setting state from a stale request if `docId`/`sessionId`
+    // change (or the component unmounts) before this resolves.
     let cancelled = false
-    // Start the session and fetch the graph concurrently — neither depends on
-    // the other's result, so there's no reason to wait for one before starting
-    // the other.
-    Promise.all([startStudySession(docId), getGraph(docId)])
-      .then(async ([newStudySession, loadedGraph]) => {
+    // Resume when given a session id, otherwise start a fresh one. Without this branch
+    // every visit to this page minted a new session, which is how duplicate sessions
+    // accumulated on a single chapter.
+    const loadSession = sessionId ? getStudySession(sessionId) : startStudySession(docId)
+    // Session and graph are fetched concurrently — neither depends on the other's result.
+    Promise.all([loadSession, getGraph(docId)])
+      .then(([loadedStudySession, loadedGraph]) => {
         if (cancelled) return
-        setStudySession(newStudySession)
+        setStudySession(loadedStudySession)
         setGraph(loadedGraph)
-        if (newStudySession.current_concept_id) {
-          const questions = await getQuestions(newStudySession.current_concept_id)
-          if (!cancelled) setQuestion(questions[0] ?? null)
-        }
+        // Both endpoints report which question the session is on, so there's nothing to
+        // work out here. That rule has one non-obvious branch (a diagnosing session is
+        // parked on its diagnostic question, not its concept's first one) and lives
+        // server-side, shared with the answer endpoint — see `_pending_question`.
+        setQuestion(loadedStudySession.pending_question)
       })
       .catch((err) => setError(String(err)))
     return () => {
       cancelled = true
     }
-  }, [docId])
+  }, [docId, sessionId])
 
   const conceptName = (id: string | null | undefined) =>
     graph?.concepts.find((c) => c.id === id)?.name ?? id ?? 'unknown'
@@ -64,7 +69,7 @@ export function StudySessionPage({ docId, onExit }: Props) {
   }
 
   if (error && !studySession) return <p className="error">{error}</p>
-  if (!studySession) return <p>Starting study session…</p>
+  if (!studySession) return <p>{sessionId ? 'Resuming study session…' : 'Starting study session…'}</p>
 
   return (
     <div>

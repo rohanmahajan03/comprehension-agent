@@ -1,21 +1,41 @@
 import { useEffect, useState } from 'react'
-import { getGraph, getQuestions } from '../api/client'
+import { getGraph, getQuestions, listStudySessions } from '../api/client'
 import { DependencyGraphViz } from '../components/DependencyGraphViz'
-import type { Concept, DependencyGraph, Question } from '../types'
+import { relativeTime } from '../components/SessionList'
+import type { Concept, DependencyGraph, Question, StudySessionSummary } from '../types'
 
 interface Props {
   docId: string
   onStartStudySession: () => void
+  onResumeStudySession: (session: StudySessionSummary) => void
 }
 
-export function GraphView({ docId, onStartStudySession }: Props) {
+export function GraphView({ docId, onStartStudySession, onResumeStudySession }: Props) {
   const [graph, setGraph] = useState<DependencyGraph | null>(null)
   const [selected, setSelected] = useState<Concept | null>(null)
   const [questions, setQuestions] = useState<Question[] | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [resumable, setResumable] = useState<StudySessionSummary | null>(null)
 
   useEffect(() => {
     getGraph(docId).then(setGraph).catch((err) => setError(String(err)))
+  }, [docId])
+
+  useEffect(() => {
+    let cancelled = false
+    // Reuses the menu's endpoint rather than adding a per-document one: the list is
+    // already filtered to unfinished sessions, so the newest entry for this chapter is
+    // exactly what "Resume" should open.
+    listStudySessions()
+      .then((sessions) => {
+        if (!cancelled) setResumable(sessions.find((s) => s.doc_id === docId) ?? null)
+      })
+      // A failure here only costs the Resume button; starting a session still works, so
+      // it deliberately doesn't set the page-level error.
+      .catch(() => undefined)
+    return () => {
+      cancelled = true
+    }
   }, [docId])
 
   useEffect(() => {
@@ -40,9 +60,24 @@ export function GraphView({ docId, onStartStudySession }: Props) {
           its generated questions, or start a tutoring session.
         </p>
         <DependencyGraphViz graph={graph} selectedId={selected?.id} onSelect={setSelected} />
-        <p>
-          <button onClick={onStartStudySession}>Start tutoring session</button>
-        </p>
+        {/* Both actions are offered explicitly when there's something to resume. Silently
+            resuming would remove any way to restudy a chapter from scratch; always
+            starting fresh is what produced duplicate sessions in the first place. */}
+        {resumable ? (
+          <p>
+            <button onClick={() => onResumeStudySession(resumable)}>Resume session</button>{' '}
+            <button onClick={onStartStudySession}>Start fresh</button>
+            <br />
+            <small>
+              unfinished · {resumable.completed_concepts} of {resumable.total_concepts} concepts ·{' '}
+              {relativeTime(resumable.updated_at)}
+            </small>
+          </p>
+        ) : (
+          <p>
+            <button onClick={onStartStudySession}>Start tutoring session</button>
+          </p>
+        )}
       </div>
       {selected && (
         <div className="card">

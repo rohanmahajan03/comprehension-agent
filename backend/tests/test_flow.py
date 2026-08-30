@@ -4,6 +4,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
+from app.models import StudySessionStatus
 from app.services import graph_builder
 from app.store import get_store
 
@@ -100,8 +101,163 @@ def test_diagnostic_question_is_registered_in_both_places() -> None:
     )
 
 
+def test_resuming_a_diagnosing_session_serves_the_diagnostic_question() -> None:
+    """The branch that makes `pending_question` worth deriving server-side.
+
+    A diagnosing session is parked on the diagnostic question the diagnoser produced, not on
+    its concept's first stored question — that one is what the student just answered wrong.
+    Serving it on resume would re-ask it and grade the next answer against the wrong rubric.
+    """
+    doc_id = _upload_chapter()
+    study_session_id, body = _answer_until_diagnosis(doc_id)
+
+    resumed = client.get(f"/api/study-session/{study_session_id}").json()
+    assert resumed["status"] == "diagnosing"
+
+    pending = resumed["pending_question"]
+    assert pending is not None
+    assert pending["id"] == body["diagnosis"]["targeted_question"]["id"], (
+        "resuming must serve the diagnostic question the session was left on"
+    )
+
+    naive = client.get(f"/api/questions/{resumed['current_concept_id']}").json()[0]
+    assert pending["id"] != naive["id"], (
+        "the concept's first stored question is a *different* question here — if these were "
+        "ever equal this test would pass vacuously and stop guarding the branch"
+    )
+
+
+def test_resuming_an_active_session_serves_its_concept_question() -> None:
+    doc_id = _upload_chapter()
+    started = client.post("/api/study-session/start", json={"doc_id": doc_id}).json()
+
+    assert started["status"] == "active"
+    expected = client.get(f"/api/questions/{started['current_concept_id']}").json()[0]
+    assert started["pending_question"]["id"] == expected["id"]
+
+    # And the same answer comes back when the session is reopened rather than started.
+    resumed = client.get(f"/api/study-session/{started['id']}").json()
+    assert resumed["pending_question"]["id"] == expected["id"]
+
+
+def test_completed_session_has_no_pending_question() -> None:
+    doc_id = _upload_chapter()
+    session_id = client.post("/api/study-session/start", json={"doc_id": doc_id}).json()["id"]
+
+    store = get_store()
+    study_session = store.get_study_session(session_id)
+    study_session.status = StudySessionStatus.COMPLETED
+    store.save_study_session(study_session)
+
+    assert client.get(f"/api/study-session/{session_id}").json()["pending_question"] is None
+
+
+def test_answer_next_question_matches_what_resuming_would_serve() -> None:
+    """`submit_answer` and the resume endpoints derive this from one helper — prove it.
+
+    If these ever diverge, a student who answers and a student who closes the tab and comes
+    back get different questions from the same session state.
+    """
+    doc_id = _upload_chapter()
+    study_session_id, body = _answer_until_diagnosis(doc_id)
+
+    resumed = client.get(f"/api/study-session/{study_session_id}").json()
+    assert body["next_question"]["id"] == resumed["pending_question"]["id"]
+
+
 def test_graph_404_for_unknown_doc() -> None:
     assert client.get("/api/graph/does-not-exist").status_code == 404
+
+
+def _list_sessions() -> list[dict]:
+    response = client.get("/api/study-session")
+    assert response.status_code == 200
+    return response.json()
+
+
+def _find_row(rows: list[dict], session_id: str) -> dict | None:
+    return next((r for r in rows if r["id"] == session_id), None)
+
+
+def test_list_sessions_returns_unfinished_and_drops_completed() -> None:
+    """The list is self-cleaning: a session leaves it the moment it completes.
+
+    This is what makes a delete affordance unnecessary — see
+    docs/specs/2026-08-29-resume-study-session-design.md §5.
+    """
+    doc_id = _upload_chapter()
+    session_id = client.post("/api/study-session/start", json={"doc_id": doc_id}).json()["id"]
+
+    row = _find_row(_list_sessions(), session_id)
+    assert row is not None, "a freshly started session should be resumable"
+    assert row["doc_id"] == doc_id
+    assert row["total_concepts"] == 5  # the stub graph's concept count
+
+    # Complete it through the store rather than by answering N questions: this test is
+    # about the list's filter, not about the loop that eventually sets the status.
+    store = get_store()
+    study_session = store.get_study_session(session_id)
+    assert study_session is not None
+    study_session.status = StudySessionStatus.COMPLETED
+    store.save_study_session(study_session)
+
+    assert _find_row(_list_sessions(), session_id) is None, (
+        "a completed session cannot be continued and must drop out of the list"
+    )
+
+
+def test_list_sessions_sorted_most_recently_updated_first() -> None:
+    doc_id = _upload_chapter()
+    older = client.post("/api/study-session/start", json={"doc_id": doc_id}).json()["id"]
+    newer = client.post("/api/study-session/start", json={"doc_id": doc_id}).json()["id"]
+
+    # Other tests share the store's singleton, so compare positions of just these two.
+    ids = [r["id"] for r in _list_sessions()]
+    assert ids.index(newer) < ids.index(older)
+
+
+def test_list_session_progress_is_topological_position() -> None:
+    """`completed_concepts` is the position of current_concept_id in topological order.
+
+    Not an answer tally: a diagnosis appends history without advancing a concept, so the
+    two diverge exactly when a student is struggling.
+    """
+    doc_id = _upload_chapter()
+    session_id = client.post("/api/study-session/start", json={"doc_id": doc_id}).json()["id"]
+
+    # A new session sits on the first concept in topological order — zero completed.
+    assert _find_row(_list_sessions(), session_id)["completed_concepts"] == 0
+
+    store = get_store()
+    study_session = store.get_study_session(session_id)
+    # "derivatives" is index 2 of the stub graph's order (limits, continuity, derivatives, …).
+    study_session.current_concept_id = f"{doc_id}:derivatives"
+    store.save_study_session(study_session)
+    assert _find_row(_list_sessions(), session_id)["completed_concepts"] == 2
+
+    # A session with no current concept reports 0 rather than raising.
+    study_session.current_concept_id = None
+    store.save_study_session(study_session)
+    assert _find_row(_list_sessions(), session_id)["completed_concepts"] == 0
+
+
+def test_uploaded_title_reaches_the_session_list() -> None:
+    """`title` was accepted by the upload endpoint and silently dropped before this feature."""
+    doc_id = client.post(
+        "/api/textbook",
+        json={"text": "A sample chapter about calculus.", "title": "Calculus I"},
+    ).json()["doc_id"]
+    session_id = client.post("/api/study-session/start", json={"doc_id": doc_id}).json()["id"]
+
+    assert _find_row(_list_sessions(), session_id)["title"] == "Calculus I"
+
+
+def test_untitled_upload_reports_null_title() -> None:
+    """The API returns null rather than synthesizing a label; the client renders a snippet."""
+    doc_id = _upload_chapter()  # no title supplied
+    session_id = client.post("/api/study-session/start", json={"doc_id": doc_id}).json()["id"]
+
+    assert _find_row(_list_sessions(), session_id)["title"] is None
 
 
 def test_failed_ingestion_leaves_no_orphan_document(monkeypatch: pytest.MonkeyPatch) -> None:

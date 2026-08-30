@@ -7,7 +7,10 @@ from app.models.schemas import (
     HistoryEntry,
     Question,
     StudySession,
+    StudySessionDetail,
     StudySessionStatus,
+    StudySessionSummary,
+    StudySessionSummaryRow,
 )
 
 __all__ = [
@@ -19,5 +22,8 @@ __all__ = [
     "HistoryEntry",
     "Question",
     "StudySession",
+    "StudySessionDetail",
     "StudySessionStatus",
+    "StudySessionSummary",
+    "StudySessionSummaryRow",
 ]

@@ -27,7 +27,7 @@ def upload_textbook(payload: TextbookUpload) -> TextbookUploadResponse:
 
     store = get_store()
     doc_id = uuid.uuid4().hex[:12]
-    store.save_document(doc_id, payload.text)
+    store.save_document(doc_id, payload.text, payload.title)
 
     # The document has to be persisted first — concepts reference it by foreign key — but
     # everything after it can fail (both steps are real LLM calls). Without this rollback a

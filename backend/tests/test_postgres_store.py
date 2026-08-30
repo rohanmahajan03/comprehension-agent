@@ -1,20 +1,31 @@
 """Tests for PostgresStore against a real Postgres instance.
 
-Skipped when DATABASE_URL is unset — the same opt-in pattern the `geval` suites use for
-LLM_API_KEY, just gated on database availability instead. Run against a real instance via:
+⚠️ DESTRUCTIVE. Every test starts by TRUNCATEing all five tables. It therefore reads
+`TEST_DATABASE_URL`, **not** `DATABASE_URL` — pointing it at the working database would
+delete real documents, graphs, and study sessions. Two independent guards enforce that:
+the separate variable, and a check that the database name ends in `_test`.
+
+Skipped when TEST_DATABASE_URL is unset — the same opt-in pattern the `geval` suites use
+for LLM_API_KEY, just gated on database availability instead. Run it via:
 
     docker compose up -d postgres
-    cd backend && set -a && source ../.env && set +a && .venv/bin/pytest tests/test_postgres_store.py -v
+    cd backend && TEST_DATABASE_URL=postgresql+psycopg://comprehension_agent:devpassword@localhost:5433/comprehension_agent_test \\
+      .venv/bin/pytest tests/test_postgres_store.py -v
+
+The test database is created on first volume init by docker/postgres/initdb/, and must be
+migrated (`alembic upgrade head` against the same URL) before the suite will pass.
 
 No testcontainers: like the geval suites expect a real API key, these expect a real,
-already-migrated Postgres reachable at DATABASE_URL.
+already-migrated Postgres.
 """
+
+import os
 
 import pytest
 from sqlalchemy import text
 
 from app.config import get_settings
-from app.db.engine import get_engine
+from app.db.engine import _session_factory, get_engine
 from app.models import (
     Answer,
     Concept,
@@ -29,10 +40,46 @@ from app.models import (
 from app.store.postgres_store import PostgresStore
 
 
-@pytest.fixture(autouse=True)
-def _require_database() -> None:
-    if not get_settings().database_url:
-        pytest.skip("DATABASE_URL not set — this suite requires a real Postgres instance")
+@pytest.fixture(autouse=True, scope="module")
+def _require_database():
+    """Point the engine at a dedicated test database, and refuse to run against any other.
+
+    This suite truncates. The guards exist because a previous run of it, pointed at the
+    working database via an exported DATABASE_URL, destroyed real documents and study
+    sessions:
+
+    1. The URL comes from `TEST_DATABASE_URL`. Exporting `DATABASE_URL` — the variable that
+       points at real data — no longer enables this suite; it skips instead.
+    2. The database name must end in `_test`. A `TEST_DATABASE_URL` aimed at the working
+       database fails loudly rather than truncating it.
+
+    Failing (not skipping) on guard 2 is deliberate: a misconfigured URL is a mistake worth
+    surfacing, whereas an unset one just means "not running DB tests right now".
+    """
+    url = os.environ.get("TEST_DATABASE_URL", "").strip()
+    if not url:
+        pytest.skip("TEST_DATABASE_URL not set — this suite requires a real Postgres instance")
+
+    database_name = url.rsplit("/", 1)[-1].split("?", 1)[0]
+    if not database_name.endswith("_test"):
+        pytest.fail(
+            f"refusing to run destructive tests against database {database_name!r}: "
+            "TEST_DATABASE_URL must name a database whose name ends in '_test'"
+        )
+
+    previous = os.environ.get("DATABASE_URL")
+    os.environ["DATABASE_URL"] = url
+    # Settings and engine are both lru_cached, so they must be rebuilt after the swap —
+    # otherwise a cached engine from an earlier import still points at the old URL.
+    for cached in (get_settings, get_engine, _session_factory):
+        cached.cache_clear()
+    yield
+    if previous is None:
+        os.environ.pop("DATABASE_URL", None)
+    else:
+        os.environ["DATABASE_URL"] = previous
+    for cached in (get_settings, get_engine, _session_factory):
+        cached.cache_clear()
 
 
 @pytest.fixture(autouse=True)
@@ -276,3 +323,65 @@ def test_history_resave_preserves_order_and_grows(store: PostgresStore) -> None:
     final = store.get_study_session("sess1")
     assert [e.question.id for e in final.history] == [q1.id, q2.id]
     assert [e.answer.text for e in final.history] == ["first", "second"]
+
+
+def test_list_unfinished_sessions_joins_title_and_counts_concepts() -> None:
+    """The list query's join and correlated count, against a real database.
+
+    Exercises the two cases the count has to get right: a document with several concepts,
+    and one with a NULL title (uploaded before titles existed, or without one).
+    """
+    store = PostgresStore()
+    store.save_document("d1", "text one", "Chapter One")
+    store.save_document("d2", "text two")  # deliberately untitled
+    store.save_graph(
+        DependencyGraph(
+            doc_id="d1",
+            concepts=[
+                Concept(id="d1:a", name="A", summary="s"),
+                Concept(id="d1:b", name="B", summary="s", depends_on=["d1:a"]),
+            ],
+        )
+    )
+    store.save_graph(
+        DependencyGraph(doc_id="d2", concepts=[Concept(id="d2:a", name="A", summary="s")])
+    )
+
+    store.save_study_session(StudySession(id="s1", doc_id="d1", current_concept_id="d1:b"))
+    store.save_study_session(StudySession(id="s2", doc_id="d2"))
+    store.save_study_session(
+        StudySession(id="s3", doc_id="d1", status=StudySessionStatus.COMPLETED)
+    )
+
+    by_id = {r.id: r for r in store.list_unfinished_sessions()}
+
+    assert "s3" not in by_id, "completed sessions must be excluded by the query"
+    assert by_id["s1"].title == "Chapter One"
+    assert by_id["s1"].total_concepts == 2
+    assert by_id["s1"].current_concept_id == "d1:b"
+    assert by_id["s2"].title is None
+    assert by_id["s2"].total_concepts == 1
+
+
+def test_save_advances_updated_at_but_preserves_created_at() -> None:
+    """`updated_at` is what the list sorts by, so every write must move it.
+
+    `created_at` must survive an update: it's excluded from the upsert's set_ clause
+    precisely so a resave doesn't overwrite the original insert time.
+    """
+    store = PostgresStore()
+    store.save_document("d1", "text")
+    store.save_graph(
+        DependencyGraph(doc_id="d1", concepts=[Concept(id="d1:a", name="A", summary="s")])
+    )
+
+    study_session = StudySession(id="s1", doc_id="d1", current_concept_id="d1:a")
+    store.save_study_session(study_session)
+    first = store.get_study_session("s1")
+
+    study_session.status = StudySessionStatus.DIAGNOSING
+    store.save_study_session(study_session)
+    second = store.get_study_session("s1")
+
+    assert second.updated_at > first.updated_at
+    assert second.created_at == first.created_at

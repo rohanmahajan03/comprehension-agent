@@ -6,6 +6,12 @@ services:
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
     volumes:
       - ./backend/app:/app/app
+      # Migrations must be mounted too, not just app code. main.py runs `alembic upgrade
+      # head` on startup, so if you generate a revision on the host (or via the native
+      # venv) and the container is still running the image's baked-in alembic/ directory,
+      # startup dies with "Can't locate revision identified by '<new_rev>'" — the database
+      # is ahead of the revision files the container can see.
+      - ./backend/alembic:/app/alembic
 
   frontend:
     # Distinct image name so dev and prod builds never overwrite each other's tag

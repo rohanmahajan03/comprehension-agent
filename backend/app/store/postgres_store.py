@@ -10,7 +10,9 @@ cannot accidentally cascade into the `questions` table through the ORM relations
 design's §3, a graph write must never touch questions; only `save_questions` does).
 """
 
-from sqlalchemy import delete, select
+from datetime import UTC, datetime
+
+from sqlalchemy import delete, func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import selectinload
 
@@ -26,8 +28,9 @@ from app.models import (
     Question,
     StudySession,
     StudySessionStatus,
+    StudySessionSummaryRow,
 )
-from app.store.memory_store import Store
+from app.store.memory_store import SNIPPET_CHARS, Store, make_snippet
 
 
 def _to_question(row: QuestionRow) -> Question:
@@ -51,10 +54,13 @@ def _to_concept(row: ConceptRow) -> Concept:
 
 
 class PostgresStore(Store):
-    def save_document(self, doc_id: str, text: str) -> None:
+    def save_document(self, doc_id: str, text: str, title: str | None = None) -> None:
         with session_scope() as session:
-            stmt = pg_insert(DocumentRow).values(id=doc_id, text=text)
-            stmt = stmt.on_conflict_do_update(index_elements=["id"], set_={"text": stmt.excluded.text})
+            stmt = pg_insert(DocumentRow).values(id=doc_id, text=text, title=title)
+            stmt = stmt.on_conflict_do_update(
+                index_elements=["id"],
+                set_={"text": stmt.excluded.text, "title": stmt.excluded.title},
+            )
             session.execute(stmt)
 
     def get_document(self, doc_id: str) -> str | None:
@@ -158,19 +164,25 @@ class PostgresStore(Store):
         fully re-insert on every call. Unlike `questions`, nothing has a foreign key pointing
         at `history_entries.id`, so this can never violate referential integrity.
         """
+        study_session.updated_at = datetime.now(UTC)
         with session_scope() as session:
             stmt = pg_insert(StudySessionRow).values(
                 id=study_session.id,
                 doc_id=study_session.doc_id,
                 current_concept_id=study_session.current_concept_id,
                 status=study_session.status.value,
+                created_at=study_session.created_at,
+                updated_at=study_session.updated_at,
             )
             stmt = stmt.on_conflict_do_update(
                 index_elements=["id"],
+                # `created_at` is deliberately absent: on an update it must keep the value
+                # written at insert, not be overwritten with the incoming object's field.
                 set_={
                     "doc_id": stmt.excluded.doc_id,
                     "current_concept_id": stmt.excluded.current_concept_id,
                     "status": stmt.excluded.status,
+                    "updated_at": stmt.excluded.updated_at,
                 },
             )
             session.execute(stmt)
@@ -241,4 +253,55 @@ class PostgresStore(Store):
                 current_concept_id=row.current_concept_id,
                 history=history,
                 status=StudySessionStatus(row.status),
+                created_at=row.created_at,
+                updated_at=row.updated_at,
             )
+
+    def list_unfinished_sessions(self) -> list[StudySessionSummaryRow]:
+        """One query: join the title, count the document's concepts, filter, sort.
+
+        The concept count is a correlated subquery rather than a GROUP BY join so that a
+        document with no concepts yields 0 instead of dropping the session from the result.
+        `history_entries` is intentionally not counted — progress is the topological
+        position of `current_concept_id`, computed by the router, not an answer tally.
+        """
+        total_concepts = (
+            select(func.count(ConceptRow.id))
+            .where(ConceptRow.doc_id == StudySessionRow.doc_id)
+            .correlate(StudySessionRow)
+            .scalar_subquery()
+        )
+        with session_scope() as session:
+            rows = session.execute(
+                select(
+                    StudySessionRow.id,
+                    StudySessionRow.doc_id,
+                    DocumentRow.title,
+                    # Sliced in SQL, not fetched whole: a chapter is thousands of
+                    # characters and the list renders one line of it.
+                    func.left(DocumentRow.text, SNIPPET_CHARS * 2).label("text_head"),
+                    StudySessionRow.status,
+                    StudySessionRow.current_concept_id,
+                    total_concepts.label("total_concepts"),
+                    StudySessionRow.updated_at,
+                )
+                .join(DocumentRow, DocumentRow.id == StudySessionRow.doc_id)
+                .where(StudySessionRow.status != StudySessionStatus.COMPLETED.value)
+                .order_by(StudySessionRow.updated_at.desc())
+            ).all()
+
+            return [
+                StudySessionSummaryRow(
+                    id=r.id,
+                    doc_id=r.doc_id,
+                    title=r.title,
+                    # SQL gave us a generous head of the text; make_snippet collapses
+                    # whitespace and trims to the final length, identically to InMemoryStore.
+                    text_snippet=make_snippet(r.text_head or ""),
+                    status=StudySessionStatus(r.status),
+                    current_concept_id=r.current_concept_id,
+                    total_concepts=r.total_concepts,
+                    updated_at=r.updated_at,
+                )
+                for r in rows
+            ]
