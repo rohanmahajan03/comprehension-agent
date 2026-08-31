@@ -30,7 +30,11 @@ export default function App() {
 
   return (
     <div className="container">
-      <h1>Adaptive Concept Tutor</h1>
+      <h1>
+        <button className="home-link" onClick={() => setPage('menu')}>
+          Adaptive Concept Tutor
+        </button>
+      </h1>
       {page === 'menu' && (
         <MenuPage
           onUploaded={(id) => {

@@ -103,9 +103,9 @@ export function DependencyGraphViz({ graph, selectedId, onSelect }: Props) {
               width={NODE_WIDTH}
               height={NODE_HEIGHT}
               rx={10}
-              fill={selected ? '#4b5bd7' : 'white'}
+              fill={selected ? '#eef0fd' : 'white'}
               stroke={selected ? '#4b5bd7' : '#b8bede'}
-              strokeWidth={1.5}
+              strokeWidth={selected ? 2 : 1.5}
             />
             <text
               x={NODE_WIDTH / 2}
@@ -113,7 +113,7 @@ export function DependencyGraphViz({ graph, selectedId, onSelect }: Props) {
               dominantBaseline="middle"
               textAnchor="middle"
               fontSize={13}
-              fill={selected ? 'white' : '#1a1a2e'}
+              fill="#1a1a2e"
             >
               {concept.name}
             </text>

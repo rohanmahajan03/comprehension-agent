@@ -24,6 +24,17 @@ h1 {
   font-size: 1.6rem;
 }
 
+.home-link {
+  all: unset;
+  font: inherit;
+  font-weight: bold;
+  cursor: pointer;
+}
+
+.home-link:hover {
+  text-decoration: underline;
+}
+
 textarea {
   width: 100%;
   font: inherit;
