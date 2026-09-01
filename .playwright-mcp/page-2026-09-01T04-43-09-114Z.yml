@@ -1,0 +1,14 @@
+- generic [ref=e3]:
+  - heading [level=1] [ref=e4]:
+    - button "Adaptive Concept Tutor" [ref=e5] [cursor=pointer]
+  - generic [ref=e41]:
+    - heading "Dependency graph" [level=2] [ref=e42]
+    - paragraph [ref=e43]: Arrows point from prerequisite to dependent concept. Click a concept to preview its generated questions, or start a tutoring session.
+    - img "Concept dependency graph" [ref=e44]:
+      - generic [ref=e46] [cursor=pointer]: Log-structured store
+      - generic [ref=e49] [cursor=pointer]: Hash index
+      - generic [ref=e52] [cursor=pointer]: Compaction
+    - paragraph [ref=e55]:
+      - button "Resume session" [ref=e56] [cursor=pointer]
+      - button "Start fresh" [ref=e57] [cursor=pointer]
+      - generic [ref=e58]: unfinished · 1 of 3 concepts · yesterday

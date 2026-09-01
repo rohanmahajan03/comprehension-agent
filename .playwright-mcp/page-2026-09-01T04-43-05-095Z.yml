@@ -1,0 +1,18 @@
+- generic [ref=e3]:
+  - heading [level=1] [ref=e4]:
+    - button "Adaptive Concept Tutor" [ref=e5] [cursor=pointer]
+  - generic [ref=e27]:
+    - generic [ref=e28]:
+      - heading "Tutoring session" [level=2] [ref=e29]
+      - paragraph [ref=e30]:
+        - text: "Status:"
+        - generic [ref=e31]: diagnosing
+        - text: "· Current concept:"
+        - strong [ref=e32]: Hash index
+      - button "Back to graph" [ref=e33] [cursor=pointer]
+    - generic [ref=e34]:
+      - paragraph [ref=e35]:
+        - strong [ref=e36]: Describe a concrete scenario that illustrates how a hash index enables an efficient value lookup in a log-structured store.
+      - textbox "Type your answer…" [ref=e37]
+      - paragraph [ref=e38]:
+        - button "Submit answer" [disabled] [ref=e39]

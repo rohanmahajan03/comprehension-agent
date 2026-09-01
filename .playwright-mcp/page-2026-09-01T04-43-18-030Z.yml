@@ -1,0 +1,18 @@
+- generic [ref=e3]:
+  - heading [level=1] [ref=e4]:
+    - button "Adaptive Concept Tutor" [ref=e5] [cursor=pointer]
+  - generic [ref=e59]:
+    - generic [ref=e60]:
+      - heading "Tutoring session" [level=2] [ref=e61]
+      - paragraph [ref=e62]:
+        - text: "Status:"
+        - generic [ref=e63]: active
+        - text: "· Current concept:"
+        - strong [ref=e64]: Log-structured store
+      - button "Back to graph" [ref=e65] [cursor=pointer]
+    - generic [ref=e66]:
+      - paragraph [ref=e67]:
+        - strong [ref=e68]: What is a log-structured store and how does it handle write operations?
+      - textbox "Type your answer…" [ref=e69]
+      - paragraph [ref=e70]:
+        - button "Submit answer" [disabled] [ref=e71]

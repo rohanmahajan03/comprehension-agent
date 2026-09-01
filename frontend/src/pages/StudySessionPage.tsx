@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { getGraph, getStudySession, startStudySession, submitAnswer } from '../api/client'
 import { QuestionCard } from '../components/QuestionCard'
 import type {
@@ -6,6 +6,7 @@ import type {
   DependencyGraph,
   Question,
   StudySession,
+  StudySessionDetail,
 } from '../types'
 
 interface Props {
@@ -22,15 +23,32 @@ export function StudySessionPage({ docId, sessionId, onExit }: Props) {
   const [lastResult, setLastResult] = useState<AnswerResponse | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // Caches the in-flight `startStudySession` call per docId so React StrictMode's dev-mode
+  // double-invoke of the mount effect below reuses the one POST instead of firing a second.
+  // Without this, every fresh start minted two sessions server-side — the second is the one
+  // this page ends up tracking, while the first lingers forever as an untouched duplicate at
+  // 0 progress in the "continue a session" list (that's the bug behind the ghost 0-of-N row).
+  const startedSessionRef = useRef<{ docId: string; promise: Promise<StudySessionDetail> } | null>(
+    null,
+  )
 
   useEffect(() => {
     // `cancelled` guards against setting state from a stale request if `docId`/`sessionId`
     // change (or the component unmounts) before this resolves.
     let cancelled = false
-    // Resume when given a session id, otherwise start a fresh one. Without this branch
-    // every visit to this page minted a new session, which is how duplicate sessions
-    // accumulated on a single chapter.
-    const loadSession = sessionId ? getStudySession(sessionId) : startStudySession(docId)
+    // Resume when given a session id, otherwise start a fresh one (reusing a cached
+    // in-flight start for the same docId — see `startedSessionRef` above). Without the
+    // sessionId branch, every visit to this page minted a new session, which is how
+    // duplicate sessions accumulated on a single chapter.
+    let loadSession: Promise<StudySessionDetail>
+    if (sessionId) {
+      loadSession = getStudySession(sessionId)
+    } else if (startedSessionRef.current?.docId === docId) {
+      loadSession = startedSessionRef.current.promise
+    } else {
+      loadSession = startStudySession(docId)
+      startedSessionRef.current = { docId, promise: loadSession }
+    }
     // Session and graph are fetched concurrently — neither depends on the other's result.
     Promise.all([loadSession, getGraph(docId)])
       .then(([loadedStudySession, loadedGraph]) => {
