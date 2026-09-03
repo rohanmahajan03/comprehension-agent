@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { listStudySessions, uploadTextbook } from '../api/client'
+import { deleteStudySession, listStudySessions, uploadTextbook } from '../api/client'
 import { SessionList } from '../components/SessionList'
 import type { StudySessionSummary } from '../types'
 
@@ -32,12 +32,27 @@ export function MenuPage({ onUploaded, onResume }: Props) {
       .catch((err) => {
         // Surfaced above the form rather than replacing the page: a broken list must
         // never block uploading a new chapter.
-        if (!cancelled) setSessionsError(err instanceof Error ? err.message : String(err))
+        if (!cancelled) {
+          setSessionsError(
+            `Couldn’t load your sessions: ${err instanceof Error ? err.message : String(err)}`
+          )
+        }
       })
     return () => {
       cancelled = true
     }
   }, [])
+
+  const handleDelete = async (session: StudySessionSummary) => {
+    try {
+      await deleteStudySession(session.id)
+      setSessions((prev) => prev.filter((s) => s.id !== session.id))
+    } catch (err) {
+      setSessionsError(
+        `Couldn’t delete session: ${err instanceof Error ? err.message : String(err)}`
+      )
+    }
+  }
 
   const submit = async () => {
     setSubmitting(true)
@@ -54,8 +69,8 @@ export function MenuPage({ onUploaded, onResume }: Props) {
 
   return (
     <div>
-      {sessionsError && <p className="error">Couldn’t load your sessions: {sessionsError}</p>}
-      <SessionList sessions={sessions} onResume={onResume} />
+      {sessionsError && <p className="error">{sessionsError}</p>}
+      <SessionList sessions={sessions} onResume={onResume} onDelete={handleDelete} />
 
       <div className="card">
         <h2>Upload a chapter</h2>

@@ -83,6 +83,11 @@ class Store(ABC):
     def get_study_session(self, study_session_id: str) -> StudySession | None: ...
 
     @abstractmethod
+    def delete_study_session(self, study_session_id: str) -> None:
+        """Remove a session and its history. Idempotent — deleting an unknown id is not an error."""
+        ...
+
+    @abstractmethod
     def list_unfinished_sessions(self) -> list[StudySessionSummaryRow]:
         """Sessions that can still be continued, most recently updated first.
 
@@ -171,6 +176,9 @@ class InMemoryStore(Store):
 
     def get_study_session(self, study_session_id: str) -> StudySession | None:
         return self._study_sessions.get(study_session_id)
+
+    def delete_study_session(self, study_session_id: str) -> None:
+        self._study_sessions.pop(study_session_id, None)
 
     def list_unfinished_sessions(self) -> list[StudySessionSummaryRow]:
         rows = [

@@ -182,8 +182,9 @@ def _find_row(rows: list[dict], session_id: str) -> dict | None:
 def test_list_sessions_returns_unfinished_and_drops_completed() -> None:
     """The list is self-cleaning: a session leaves it the moment it completes.
 
-    This is what makes a delete affordance unnecessary — see
-    docs/specs/2026-08-29-resume-study-session-design.md §5.
+    Independent of `DELETE /api/study-session/{id}` (docs/specs/2026-09-03-delete-study-
+    session-design.md) — completion drops a session from this list automatically; delete
+    removes a session (of any status) from the store entirely.
     """
     doc_id = _upload_chapter()
     session_id = client.post("/api/study-session/start", json={"doc_id": doc_id}).json()["id"]
@@ -239,6 +240,18 @@ def test_list_session_progress_is_topological_position() -> None:
     study_session.current_concept_id = None
     store.save_study_session(study_session)
     assert _find_row(_list_sessions(), session_id)["completed_concepts"] == 0
+
+
+def test_delete_session_removes_it() -> None:
+    doc_id = _upload_chapter()
+    session_id = client.post("/api/study-session/start", json={"doc_id": doc_id}).json()["id"]
+
+    assert client.delete(f"/api/study-session/{session_id}").status_code == 204
+    assert client.get(f"/api/study-session/{session_id}").status_code == 404
+
+
+def test_delete_unknown_session_404s() -> None:
+    assert client.delete("/api/study-session/does-not-exist").status_code == 404
 
 
 def test_uploaded_title_reaches_the_session_list() -> None:

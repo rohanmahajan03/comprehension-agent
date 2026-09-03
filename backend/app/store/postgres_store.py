@@ -257,6 +257,13 @@ class PostgresStore(Store):
                 updated_at=row.updated_at,
             )
 
+    def delete_study_session(self, study_session_id: str) -> None:
+        """History entries reach study_sessions through ON DELETE CASCADE
+        (app/db/models.py), so the database removes them. Deleting an unknown id is a no-op.
+        """
+        with session_scope() as session:
+            session.execute(delete(StudySessionRow).where(StudySessionRow.id == study_session_id))
+
     def list_unfinished_sessions(self) -> list[StudySessionSummaryRow]:
         """One query: join the title, count the document's concepts, filter, sort.
 

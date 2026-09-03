@@ -19,6 +19,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     const body = await response.text()
     throw new Error(`${response.status} ${response.statusText}: ${body}`)
   }
+  if (response.status === 204) return undefined as T
   return response.json() as Promise<T>
 }
 
@@ -58,5 +59,11 @@ export function submitAnswer(studySessionId: string, answer: Answer): Promise<An
   return request(`/api/study-session/${encodeURIComponent(studySessionId)}/answer`, {
     method: 'POST',
     body: JSON.stringify(answer),
+  })
+}
+
+export function deleteStudySession(studySessionId: string): Promise<void> {
+  return request(`/api/study-session/${encodeURIComponent(studySessionId)}`, {
+    method: 'DELETE',
   })
 }

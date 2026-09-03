@@ -379,6 +379,57 @@ def test_delete_document_cascades_to_everything_derived_from_it() -> None:
     assert store.get_questions("keeper:a") is not None
 
 
+def test_delete_study_session_cascades_to_history_entries() -> None:
+    """Mirrors test_delete_document_cascades_to_everything_derived_from_it, one level down:
+    `delete_study_session` relies on `history_entries.study_session_id`'s ON DELETE CASCADE
+    rather than deleting history rows itself.
+    """
+    store = PostgresStore()
+    store.save_document("doc", "text", "Doc")
+    store.save_graph(
+        DependencyGraph(doc_id="doc", concepts=[Concept(id="doc:a", name="A", summary="s")])
+    )
+    question = Question(id="doc:a:q1", concept_id="doc:a", prompt="p", expected_answer_notes="n")
+    store.save_questions("doc:a", [question])
+
+    doomed = StudySession(id="doomed_sess", doc_id="doc", current_concept_id="doc:a")
+    doomed.history.append(
+        HistoryEntry(
+            question=question,
+            answer=Answer(question_id=question.id, text="a"),
+            evaluation=EvaluationResult(correct=True, explanation="e"),
+            diagnosis=None,
+        )
+    )
+    store.save_study_session(doomed)
+    kept = StudySession(id="kept_sess", doc_id="doc", current_concept_id="doc:a")
+    store.save_study_session(kept)
+
+    store.delete_study_session("doomed_sess")
+
+    assert store.get_study_session("doomed_sess") is None
+    with get_engine().begin() as conn:
+        remaining = conn.execute(
+            text("select count(*) from history_entries where study_session_id = 'doomed_sess'")
+        ).scalar_one()
+    assert remaining == 0, "history entries must go with their session"
+
+    # The neighbouring session, and the document/questions it shares, are untouched.
+    assert store.get_study_session("kept_sess") is not None
+    assert store.get_document("doc") == "text"
+    assert store.get_questions("doc:a") is not None
+
+
+def test_delete_study_session_unknown_id_is_a_noop() -> None:
+    store = PostgresStore()
+    store.save_document("doc", "text", "Doc")
+    store.save_study_session(StudySession(id="kept_sess", doc_id="doc"))
+
+    store.delete_study_session("never-existed")
+
+    assert store.get_study_session("kept_sess") is not None
+
+
 def test_delete_document_is_a_noop_for_an_unknown_id() -> None:
     """Called on the ingestion failure path, where the document may never have been written."""
     store = PostgresStore()

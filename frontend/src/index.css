@@ -94,14 +94,20 @@ button:disabled {
   margin-top: 0.5rem;
 }
 
-/* A row is a <button> for keyboard and screen-reader affordance, so it has to opt out of
-   the global button styling above rather than look like a submit control. */
 .session-row {
   display: flex;
+  align-items: stretch;
+  gap: 0.5rem;
+}
+
+/* The resume target is a <button> for keyboard and screen-reader affordance, so it has to
+   opt out of the global button styling above rather than look like a submit control. */
+.session-resume {
+  display: flex;
+  flex: 1;
   flex-direction: column;
   align-items: flex-start;
   gap: 0.25rem;
-  width: 100%;
   text-align: left;
   padding: 0.75rem 1rem;
   background: #f7f7fb;
@@ -109,14 +115,83 @@ button:disabled {
   color: inherit;
 }
 
-.session-row:hover:not(:disabled) {
+.session-resume:hover:not(:disabled) {
   background: #eeeef8;
   border-color: #c9c9e0;
 }
 
-.session-row span {
+.session-resume span {
   font-size: 0.85rem;
   color: #555;
+}
+
+.session-delete {
+  background: transparent;
+  color: #b3261e;
+  border: 1px solid #e3e3ee;
+}
+
+.session-delete:hover:not(:disabled) {
+  background: #fbdcd9;
+  border-color: #f3b7b1;
+}
+
+/* Replaces the row's content in place when its delete button is clicked — same footprint
+   as the resume/delete pair it stands in for, tinted to read as a danger prompt rather
+   than a second click target to skim past. */
+.session-row-confirming {
+  background: #fdf4f3;
+  border: 1px solid #f3b7b1;
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+  align-items: center;
+}
+
+.session-confirm-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.session-confirm-text span {
+  font-size: 0.85rem;
+  color: #a4261c;
+}
+
+.session-confirm-actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-shrink: 0;
+}
+
+.session-cancel {
+  background: transparent;
+  color: inherit;
+  border: 1px solid #ccc;
+}
+
+.session-cancel:hover:not(:disabled) {
+  background: #eeeef8;
+}
+
+.session-delete-confirm {
+  background-color: #b3261e;
+}
+
+.session-delete-confirm:hover:not(:disabled) {
+  background-color: #8f1e17;
+}
+
+@media (max-width: 480px) {
+  .session-row-confirming {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .session-confirm-actions {
+    justify-content: flex-end;
+  }
 }
 
 .badge {

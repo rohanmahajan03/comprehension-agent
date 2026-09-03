@@ -111,6 +111,31 @@ class TestDeleteDocument:
         assert store.get_document("kept") == "text"
 
 
+class TestDeleteStudySession:
+    def test_removes_the_session(self) -> None:
+        store = InMemoryStore()
+        store.save_study_session(StudySession(id="doomed", doc_id="d"))
+
+        store.delete_study_session("doomed")
+
+        assert store.get_study_session("doomed") is None
+
+    def test_leaves_other_sessions_alone(self) -> None:
+        store = InMemoryStore()
+        store.save_study_session(StudySession(id="doomed", doc_id="d"))
+        store.save_study_session(StudySession(id="kept", doc_id="d"))
+
+        store.delete_study_session("doomed")
+
+        assert store.get_study_session("kept") is not None
+
+    def test_unknown_id_is_a_noop(self) -> None:
+        store = InMemoryStore()
+        store.save_study_session(StudySession(id="kept", doc_id="d"))
+        store.delete_study_session("never-existed")
+        assert store.get_study_session("kept") is not None
+
+
 class TestListUnfinishedSessions:
     def _store_with_graph(self, concepts: int = 2) -> InMemoryStore:
         store = InMemoryStore()

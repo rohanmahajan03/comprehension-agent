@@ -107,6 +107,14 @@ def get_study_session(study_session_id: str) -> StudySessionDetail:
     return _with_pending(store, study_session)
 
 
+@router.delete("/{study_session_id}", status_code=204)
+def delete_study_session(study_session_id: str) -> None:
+    store = get_store()
+    if store.get_study_session(study_session_id) is None:
+        raise HTTPException(status_code=404, detail=f"No study session '{study_session_id}'")
+    store.delete_study_session(study_session_id)
+
+
 def _pending_question(store: Store, study_session: StudySession) -> Question | None:
     """The question this session is waiting on, derived from its own state.
 
