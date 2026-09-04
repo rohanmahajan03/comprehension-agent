@@ -7,7 +7,10 @@ services:
       - POSTGRES_DB=comprehension_agent
     ports:
       # Host port 5433, not 5432 — avoids colliding with a locally-installed Postgres.
-      - "5433:5432"
+      # Bound to loopback only — the default "5433:5432" form publishes on 0.0.0.0, which
+      # would let anyone else on the same network reach this dev database using the
+      # well-known devpassword credentials above.
+      - "127.0.0.1:5433:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
       # Creates comprehension_agent_test on first init, so the destructive PostgresStore
