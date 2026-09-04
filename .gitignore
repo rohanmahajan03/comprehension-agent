@@ -15,5 +15,8 @@ dist/
 .deepeval/
 .deepeval_telemetry.txt
 
+# Playwright MCP tool output (screenshots/snapshots from browser-automation sessions)
+.playwright-mcp/
+
 # Misc
 .DS_Store
