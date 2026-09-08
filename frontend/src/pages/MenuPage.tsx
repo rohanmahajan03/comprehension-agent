@@ -1,10 +1,13 @@
 import { useEffect, useState } from 'react'
-import { deleteStudySession, listStudySessions, uploadTextbook } from '../api/client'
+import { deleteStudySession, listDocuments, listStudySessions, uploadTextbook } from '../api/client'
+import { DocumentList } from '../components/DocumentList'
 import { SessionList } from '../components/SessionList'
-import type { StudySessionSummary } from '../types'
+import type { DocumentSummary, StudySessionSummary } from '../types'
 
 interface Props {
-  onUploaded: (docId: string) => void
+  // Called both right after a fresh upload and when opening a chapter already in the DB
+  // (from the "Your chapters" list) — either way it just means "go to this doc's graph".
+  onOpenDocument: (docId: string) => void
   onResume: (session: StudySessionSummary) => void
 }
 
@@ -15,13 +18,15 @@ interface Props {
  * user sees an empty list render nothing at all, so the page is exactly the upload form
  * it always was.
  */
-export function MenuPage({ onUploaded, onResume }: Props) {
+export function MenuPage({ onOpenDocument, onResume }: Props) {
   const [text, setText] = useState('')
   const [title, setTitle] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [sessions, setSessions] = useState<StudySessionSummary[]>([])
   const [sessionsError, setSessionsError] = useState<string | null>(null)
+  const [documents, setDocuments] = useState<DocumentSummary[]>([])
+  const [documentsError, setDocumentsError] = useState<string | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -35,6 +40,24 @@ export function MenuPage({ onUploaded, onResume }: Props) {
         if (!cancelled) {
           setSessionsError(
             `Couldn’t load your sessions: ${err instanceof Error ? err.message : String(err)}`
+          )
+        }
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    listDocuments()
+      .then((loaded) => {
+        if (!cancelled) setDocuments(loaded)
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setDocumentsError(
+            `Couldn’t load your chapters: ${err instanceof Error ? err.message : String(err)}`
           )
         }
       })
@@ -59,7 +82,7 @@ export function MenuPage({ onUploaded, onResume }: Props) {
     setError(null)
     try {
       const { doc_id } = await uploadTextbook(text, title.trim() || undefined)
-      onUploaded(doc_id)
+      onOpenDocument(doc_id)
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     } finally {
@@ -71,6 +94,9 @@ export function MenuPage({ onUploaded, onResume }: Props) {
     <div>
       {sessionsError && <p className="error">{sessionsError}</p>}
       <SessionList sessions={sessions} onResume={onResume} onDelete={handleDelete} />
+
+      {documentsError && <p className="error">{documentsError}</p>}
+      <DocumentList documents={documents} onOpen={(doc) => onOpenDocument(doc.id)} />
 
       <div className="card">
         <h2>Upload a chapter</h2>

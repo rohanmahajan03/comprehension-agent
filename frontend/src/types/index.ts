@@ -22,6 +22,18 @@ export interface DependencyGraph {
   concepts: Concept[]
 }
 
+// One row of the "your chapters" list — GET /api/textbook. Unlike StudySessionSummary,
+// no split between an internal and public shape: total_concepts is a plain count.
+export interface DocumentSummary {
+  id: string
+  // null when the chapter was uploaded without one; render text_snippet instead.
+  title: string | null
+  // Always present. A short server-computed label from the document's text.
+  text_snippet: string
+  total_concepts: number
+  created_at: string
+}
+
 export interface Answer {
   question_id: string
   text: string

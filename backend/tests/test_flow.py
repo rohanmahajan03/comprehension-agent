@@ -302,3 +302,36 @@ def test_failed_ingestion_leaves_no_orphan_document(monkeypatch: pytest.MonkeyPa
 
     assert deleted, "failed ingestion did not attempt to clean up its document"
     assert store.get_document(deleted[0]) is None, "document survived the rollback"
+
+
+def _list_documents() -> list[dict]:
+    response = client.get("/api/textbook")
+    assert response.status_code == 200
+    return response.json()
+
+
+def _find_doc(rows: list[dict], doc_id: str) -> dict | None:
+    return next((r for r in rows if r["id"] == doc_id), None)
+
+
+def test_list_documents_returns_uploaded_chapter() -> None:
+    """The "your chapters" list is how a new session can start against a graph already
+    in the DB, without re-uploading — this is that list's happy path."""
+    doc_id = client.post(
+        "/api/textbook",
+        json={"text": "A sample chapter about calculus.", "title": "Calculus I"},
+    ).json()["doc_id"]
+
+    row = _find_doc(_list_documents(), doc_id)
+    assert row is not None
+    assert row["title"] == "Calculus I"
+    assert row["total_concepts"] == 5  # the stub graph's concept count
+
+
+def test_list_documents_sorted_most_recently_created_first() -> None:
+    older = _upload_chapter()
+    newer = _upload_chapter()
+
+    # Other tests share the store's singleton, so compare positions of just these two.
+    ids = [r["id"] for r in _list_documents()]
+    assert ids.index(newer) < ids.index(older)

@@ -23,6 +23,11 @@ class DocumentRow(Base):
     # upload field it comes from is itself optional. The client renders a text snippet
     # when it's NULL rather than the API inventing a label.
     title: Mapped[str | None]
+    # server_default backfills rows that predate this column. Unlike StudySessionRow's
+    # timestamps, no Python code ever writes this explicitly: PostgresStore.save_document's
+    # upsert omits it from on_conflict_do_update's set_, so a re-save preserves the value
+    # the first INSERT's server_default produced.
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class ConceptRow(Base):

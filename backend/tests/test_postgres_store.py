@@ -498,3 +498,51 @@ def test_save_advances_updated_at_but_preserves_created_at() -> None:
 
     assert second.updated_at > first.updated_at
     assert second.created_at == first.created_at
+
+
+def test_list_documents_excludes_zero_concept_documents_and_reports_fields() -> None:
+    """The list query's join and correlated count, against a real database — mirrors
+    test_list_unfinished_sessions_joins_title_and_counts_concepts, one level up (documents,
+    not sessions). Exercises a document with several concepts, one with a NULL title, and
+    one with no graph at all (must be excluded)."""
+    store = PostgresStore()
+    store.save_document("d1", "text one", "Chapter One")
+    store.save_document("d2", "text two")  # deliberately untitled
+    store.save_document("d3", "never got a graph")
+    store.save_graph(
+        DependencyGraph(
+            doc_id="d1",
+            concepts=[
+                Concept(id="d1:a", name="A", summary="s"),
+                Concept(id="d1:b", name="B", summary="s", depends_on=["d1:a"]),
+            ],
+        )
+    )
+    store.save_graph(
+        DependencyGraph(doc_id="d2", concepts=[Concept(id="d2:a", name="A", summary="s")])
+    )
+
+    by_id = {r.id: r for r in store.list_documents()}
+
+    assert "d3" not in by_id, "a document with no concepts must be excluded"
+    assert by_id["d1"].title == "Chapter One"
+    assert by_id["d1"].total_concepts == 2
+    assert by_id["d2"].title is None
+    assert by_id["d2"].total_concepts == 1
+
+
+def test_save_document_resave_preserves_created_at() -> None:
+    """`created_at` is excluded from the upsert's set_ clause precisely so a resave
+    doesn't overwrite the original insert time — mirrors
+    test_save_advances_updated_at_but_preserves_created_at for documents."""
+    store = PostgresStore()
+    store.save_document("d1", "text", "Title")
+    store.save_graph(
+        DependencyGraph(doc_id="d1", concepts=[Concept(id="d1:a", name="A", summary="s")])
+    )
+    first = store.list_documents()[0]
+
+    store.save_document("d1", "revised text", "New title")
+    second = store.list_documents()[0]
+
+    assert second.created_at == first.created_at

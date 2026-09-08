@@ -23,6 +23,7 @@ from app.models import (
     Concept,
     DependencyGraph,
     DiagnosisResult,
+    DocumentSummary,
     EvaluationResult,
     HistoryEntry,
     Question,
@@ -75,6 +76,44 @@ class PostgresStore(Store):
         """
         with session_scope() as session:
             session.execute(delete(DocumentRow).where(DocumentRow.id == doc_id))
+
+    def list_documents(self) -> list[DocumentSummary]:
+        """Documents with at least one concept, most recently created first — see the
+        Store ABC docstring for why zero-concept documents are excluded.
+
+        The concept-count subquery is reused in both the select list and the WHERE
+        clause (SQLAlchemy correlates each occurrence independently), rather than
+        filtering in Python — cheaper than loading every document to check.
+        """
+        total_concepts = (
+            select(func.count(ConceptRow.id))
+            .where(ConceptRow.doc_id == DocumentRow.id)
+            .correlate(DocumentRow)
+            .scalar_subquery()
+        )
+        with session_scope() as session:
+            rows = session.execute(
+                select(
+                    DocumentRow.id,
+                    DocumentRow.title,
+                    func.left(DocumentRow.text, SNIPPET_CHARS * 2).label("text_head"),
+                    total_concepts.label("total_concepts"),
+                    DocumentRow.created_at,
+                )
+                .where(total_concepts > 0)
+                .order_by(DocumentRow.created_at.desc())
+            ).all()
+
+            return [
+                DocumentSummary(
+                    id=r.id,
+                    title=r.title,
+                    text_snippet=make_snippet(r.text_head or ""),
+                    total_concepts=r.total_concepts,
+                    created_at=r.created_at,
+                )
+                for r in rows
+            ]
 
     def save_graph(self, graph: DependencyGraph) -> None:
         """Upsert every concept row. Never touches `questions` — see module docstring."""

@@ -12,6 +12,7 @@ from datetime import UTC, datetime
 from app.models import (
     Concept,
     DependencyGraph,
+    DocumentSummary,
     Question,
     StudySession,
     StudySessionStatus,
@@ -51,6 +52,18 @@ class Store(ABC):
         persist the document before `build_graph()` can reference it by FK, so an LLM
         failure mid-pipeline would otherwise strand a document row with no concepts.
         Idempotent — deleting an unknown doc_id is not an error.
+        """
+        ...
+
+    @abstractmethod
+    def list_documents(self) -> list[DocumentSummary]:
+        """Documents with at least one concept, most recently created first.
+
+        Zero-concept documents are excluded rather than merely unusual: `get_graph()`
+        can't tell "a graph with zero concepts" apart from "never saved" (see
+        PostgresStore.get_graph), so listing one here would produce a link that 404s.
+        `routers/ingestion.py` now rejects zero-concept extractions outright, so this
+        only ever filters out documents that predate that fix.
         """
         ...
 
@@ -106,6 +119,7 @@ class InMemoryStore(Store):
         # Kept beside _documents rather than folded into it so `get_document() -> str | None`
         # keeps its contract and no existing caller changes.
         self._titles: dict[str, str | None] = {}
+        self._created_at: dict[str, datetime] = {}
         self._graphs: dict[str, DependencyGraph] = {}
         self._questions: dict[str, list[Question]] = {}
         self._study_sessions: dict[str, StudySession] = {}
@@ -113,6 +127,10 @@ class InMemoryStore(Store):
     def save_document(self, doc_id: str, text: str, title: str | None = None) -> None:
         self._documents[doc_id] = text
         self._titles[doc_id] = title
+        # setdefault, not assignment: PostgresStore's upsert omits this column from its
+        # on_conflict_do_update, so a re-save there preserves the original insert's
+        # server_default value — this mirrors that instead of resetting it on every call.
+        self._created_at.setdefault(doc_id, datetime.now(UTC))
 
     def get_document(self, doc_id: str) -> str | None:
         return self._documents.get(doc_id)
@@ -126,6 +144,7 @@ class InMemoryStore(Store):
         """
         self._documents.pop(doc_id, None)
         self._titles.pop(doc_id, None)
+        self._created_at.pop(doc_id, None)
         self._graphs.pop(doc_id, None)
         prefix = f"{doc_id}:"
         for concept_id in [cid for cid in self._questions if cid.startswith(prefix)]:
@@ -134,6 +153,25 @@ class InMemoryStore(Store):
             sid for sid, s in self._study_sessions.items() if s.doc_id == doc_id
         ]:
             del self._study_sessions[session_id]
+
+    def list_documents(self) -> list[DocumentSummary]:
+        rows = []
+        for doc_id, text in self._documents.items():
+            graph = self._graphs.get(doc_id)
+            total_concepts = len(graph.concepts) if graph is not None else 0
+            if total_concepts == 0:
+                continue
+            rows.append(
+                DocumentSummary(
+                    id=doc_id,
+                    title=self._titles.get(doc_id),
+                    text_snippet=make_snippet(text),
+                    total_concepts=total_concepts,
+                    created_at=self._created_at[doc_id],
+                )
+            )
+        rows.sort(key=lambda r: r.created_at, reverse=True)
+        return rows
 
     def save_graph(self, graph: DependencyGraph) -> None:
         self._graphs[graph.doc_id] = graph

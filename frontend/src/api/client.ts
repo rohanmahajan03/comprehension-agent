@@ -2,6 +2,7 @@ import type {
   Answer,
   AnswerResponse,
   DependencyGraph,
+  DocumentSummary,
   Question,
   StudySessionDetail,
   StudySessionSummary,
@@ -32,6 +33,12 @@ export function uploadTextbook(text: string, title?: string): Promise<{ doc_id: 
 
 export function getGraph(docId: string): Promise<DependencyGraph> {
   return request(`/api/graph/${encodeURIComponent(docId)}`)
+}
+
+// Chapters that already have a graph, most recently created first — lets a new session
+// start from one without re-uploading and re-paying for extraction.
+export function listDocuments(): Promise<DocumentSummary[]> {
+  return request('/api/textbook')
 }
 
 export function getQuestions(conceptId: string): Promise<Question[]> {

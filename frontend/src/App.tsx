@@ -37,7 +37,7 @@ export default function App() {
       </h1>
       {page === 'menu' && (
         <MenuPage
-          onUploaded={(id) => {
+          onOpenDocument={(id) => {
             setDocId(id)
             setResumeSessionId(null)
             setPage('graph')

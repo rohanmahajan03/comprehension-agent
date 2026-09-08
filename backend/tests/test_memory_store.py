@@ -90,6 +90,7 @@ class TestDeleteDocument:
         assert store.get_study_session("doomed_sess") is None
         # The title is dropped too, or a re-used doc_id would inherit the old label.
         assert store.list_unfinished_sessions() == []
+        assert store.list_documents() == []
 
     def test_leaves_other_documents_alone(self) -> None:
         """Questions are found by id prefix, so a doc_id that prefixes another must not match."""
@@ -189,3 +190,59 @@ class TestListUnfinishedSessions:
         store.save_study_session(StudySession(id="s", doc_id="d"))
 
         assert store.list_unfinished_sessions()[0].total_concepts == 0
+
+
+class TestListDocuments:
+    """The "your chapters" list — every document with a real graph, not just ones with
+    an active study session."""
+
+    def _save(self, store: InMemoryStore, doc_id: str, concepts: int, title: str | None = "T") -> None:
+        store.save_document(doc_id, f"Chapter text for {doc_id}.", title)
+        if concepts:
+            store.save_graph(
+                DependencyGraph(
+                    doc_id=doc_id,
+                    concepts=[
+                        Concept(id=f"{doc_id}:c{i}", name=f"C{i}", summary="s")
+                        for i in range(concepts)
+                    ],
+                )
+            )
+
+    def test_excludes_documents_with_no_concepts(self) -> None:
+        store = InMemoryStore()
+        self._save(store, "has_graph", concepts=2)
+        self._save(store, "graph_never_saved", concepts=0)
+        store.save_graph(DependencyGraph(doc_id="empty_graph", concepts=[]))
+        store.save_document("empty_graph", "text", "Empty graph")
+
+        assert [row.id for row in store.list_documents()] == ["has_graph"]
+
+    def test_sorted_most_recently_created_first(self) -> None:
+        store = InMemoryStore()
+        self._save(store, "older", concepts=1)
+        self._save(store, "newer", concepts=1)
+
+        # save_document uses setdefault, so insertion order decides this absent a forced
+        # gap — force one rather than relying on two same-microsecond writes.
+        store._created_at["older"] = datetime.now(UTC) - timedelta(hours=1)
+
+        assert [row.id for row in store.list_documents()] == ["newer", "older"]
+
+    def test_reports_title_snippet_and_concept_count(self) -> None:
+        store = InMemoryStore()
+        self._save(store, "d", concepts=3, title="Chapter")
+
+        row = store.list_documents()[0]
+        assert row.title == "Chapter"
+        assert row.text_snippet == "Chapter text for d."
+        assert row.total_concepts == 3
+
+    def test_resave_preserves_created_at(self) -> None:
+        store = InMemoryStore()
+        self._save(store, "d", concepts=1)
+        original = store.list_documents()[0].created_at
+
+        store.save_document("d", "revised text", "New title")
+
+        assert store.list_documents()[0].created_at == original

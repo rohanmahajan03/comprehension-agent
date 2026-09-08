@@ -41,6 +41,25 @@ class DependencyGraph(BaseModel):
     concepts: list[Concept] = Field(default_factory=list)
 
 
+class DocumentSummary(BaseModel):
+    """One row of the "your chapters" list.
+
+    Unlike StudySessionSummaryRow/StudySessionSummary, there's no split into an internal
+    row shape plus a router-enriched public one: total_concepts is a plain count the Store
+    can compute directly, with no services-layer (topological_order) dependency involved.
+    """
+
+    id: str
+    title: str | None = Field(
+        default=None, description="None when the document was uploaded without one"
+    )
+    text_snippet: str = Field(
+        description="Short label from the document's text, for rendering when title is None"
+    )
+    total_concepts: int
+    created_at: datetime
+
+
 class Answer(BaseModel):
     question_id: str
     text: str
