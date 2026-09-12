@@ -89,7 +89,7 @@ Free and deterministic — `evaluator.py`, `graph_builder.py`, `question_generat
 
 There are also four live G-Eval-style regression suites (using [DeepEval](https://github.com/confident-ai/deepeval)) that exercise the real LLM calls end-to-end and make real, **billed** Anthropic API calls, so none of them run as part of the default `pytest` — each auto-skips without an `LLM_API_KEY`:
 
-- `backend/tests/geval/` — grades `evaluator.evaluate()` against 10 questions / 42 answer variants (~$0.35–0.45, ~5-6 minutes per full run)
+- `backend/tests/eval_geval/` — grades `evaluator.evaluate()` against 10 questions / 42 answer variants (~$0.35–0.45, ~5-6 minutes per full run)
 - `backend/tests/graph_geval/` — grades `graph_builder.build_graph()`'s extracted concepts/edges against a golden set (`tests/graph_golden_set.md`), using a judge LLM call for concept alignment
 - `backend/tests/question_geval/` — grades `question_generator.generate_questions()`'s output against a golden set
 - `backend/tests/diagnoser_geval/` — grades `diagnoser.py`'s agentic loop against 9 hand-authored diagnosis cases: suspect accuracy by hop depth, zero-tolerance invariants (no answer leaks into the targeted question), and two judged checks on question relevance and reasoning quality
@@ -99,7 +99,7 @@ To run any of them:
 ```bash
 cd backend
 set -a && source ../.env && set +a
-.venv/bin/pytest tests/geval -v            # or tests/graph_geval, tests/question_geval, tests/diagnoser_geval
+.venv/bin/pytest tests/eval_geval -v            # or tests/graph_geval, tests/question_geval, tests/diagnoser_geval
 ```
 
 ## API surface

@@ -178,7 +178,7 @@ def format_answer_notes(expected_answer: str, grounding: str) -> str:
     `evaluator.py` grades against.
 
     Deliberately just the prose model answer, with nothing wrapped around it: that is the
-    exact shape `tests/geval` has always fed the evaluator (its `golden_answer` fixtures),
+    exact shape `tests/eval_geval` has always fed the evaluator (its `golden_answer` fixtures),
     so production and the suite that validates it stay the same kind of input. `grounding`
     is a fallback only — the schema requires an expected_answer, but a source quote is
     still better than an empty rubric if one ever comes back blank.

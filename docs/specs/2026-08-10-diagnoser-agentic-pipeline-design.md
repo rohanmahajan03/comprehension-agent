@@ -196,4 +196,4 @@ Today, `diagnoser.diagnose()` is pure deterministic Python, so `backend/tests/te
 
 **Explicitly out of scope for this change**, left as a follow-up:
 
-- A `tests/diagnoser_geval`-style regression suite (real, billed LLM calls) following the pattern established by `tests/geval`, `tests/graph_geval`, and `tests/question_geval`.
+- A `tests/diagnoser_geval`-style regression suite (real, billed LLM calls) following the pattern established by `tests/eval_geval`, `tests/graph_geval`, and `tests/question_geval`.

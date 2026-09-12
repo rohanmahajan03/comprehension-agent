@@ -61,7 +61,7 @@ class DiagnosisCase:
     hops_to_preferred: int         # 1 = immediate prereq; ≥2 exercises drilling
 ```
 
-**`evaluation_explanation` is hand-written, not produced by running the real evaluator.** That's deliberate: chaining the two services means a diagnoser failure and an evaluator failure look identical, and you can't attribute the regression. `tests/geval` makes the same choice by hand-writing `golden_answer` instead of generating it. Worth flagging as an open question (§7) since hand-written explanations may be cleaner than production ones.
+**`evaluation_explanation` is hand-written, not produced by running the real evaluator.** That's deliberate: chaining the two services means a diagnoser failure and an evaluator failure look identical, and you can't attribute the regression. `tests/eval_geval` makes the same choice by hand-writing `golden_answer` instead of generating it. Worth flagging as an open question (§7) since hand-written explanations may be cleaner than production ones.
 
 **Authoring the wrong answers is the real work here**, and it's editorial, not mechanical. Each `student_answer` has to be wrong in a way that genuinely traces to one prerequisite — a plausible answer from someone who understood everything except that concept. A generically bad answer ("I don't know") diagnoses to nothing and tests nothing. Budget real time for this; it's the fixture equivalent of `geval_test_suite.md`'s 42 hand-written answer variants.
 

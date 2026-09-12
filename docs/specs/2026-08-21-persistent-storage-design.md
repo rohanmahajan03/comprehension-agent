@@ -134,7 +134,7 @@ verified running and reachable on `localhost:5433` from both inside and outside 
 
 ## 7. Testing
 
-New `backend/tests/test_postgres_store.py`, skipped when `DATABASE_URL` is unset — the same opt-in pattern already used by `tests/geval`, `tests/graph_geval`, `tests/question_geval`, and `tests/diagnoser_geval`, just gated on database availability instead of `LLM_API_KEY`. Covers:
+New `backend/tests/test_postgres_store.py`, skipped when `DATABASE_URL` is unset — the same opt-in pattern already used by `tests/eval_geval`, `tests/graph_geval`, `tests/question_geval`, and `tests/diagnoser_geval`, just gated on database availability instead of `LLM_API_KEY`. Covers:
 
 - Round-trip save/get for every entity (`document`, `graph`, `questions`, `study_session`).
 - **The regression this design exists to prevent**: save a graph, then call `save_questions()` for one of its concepts, then call `get_graph()` again and assert the new question appears in `Concept.questions` — without ever touching `save_graph()` a second time. This is the exact bug (§3) made structurally impossible; the test is what proves it.
