@@ -1,11 +1,13 @@
 import type {
   Answer,
   AnswerResponse,
+  Concept,
   DependencyGraph,
   DocumentSummary,
   Question,
   StudySessionDetail,
   StudySessionSummary,
+  UploadTextbookResponse,
 } from '../types'
 
 // Same-origin by default; vite's dev server proxies /api to the backend.
@@ -24,10 +26,16 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return response.json() as Promise<T>
 }
 
-export function uploadTextbook(text: string, title?: string): Promise<{ doc_id: string }> {
+// `review` stops the pipeline after graph extraction so the concept graph can be edited;
+// the chapter comes back 'draft' and has no questions until finalizeGraph() runs.
+export function uploadTextbook(
+  text: string,
+  title?: string,
+  review = false
+): Promise<UploadTextbookResponse> {
   return request('/api/textbook', {
     method: 'POST',
-    body: JSON.stringify({ text, title }),
+    body: JSON.stringify({ text, title, review }),
   })
 }
 
@@ -73,4 +81,56 @@ export function deleteStudySession(studySessionId: string): Promise<void> {
   return request(`/api/study-session/${encodeURIComponent(studySessionId)}`, {
     method: 'DELETE',
   })
+}
+
+// --- Graph review (draft chapters only — these 409 against a chapter uploaded without
+// `review`, and against one whose review has already been approved) ---
+
+function conceptPath(docId: string, conceptId: string): string {
+  return `/api/graph/${encodeURIComponent(docId)}/concepts/${encodeURIComponent(conceptId)}`
+}
+
+export function addConcept(
+  docId: string,
+  concept: { slug: string; name: string; summary: string }
+): Promise<Concept> {
+  return request(`/api/graph/${encodeURIComponent(docId)}/concepts`, {
+    method: 'POST',
+    body: JSON.stringify(concept),
+  })
+}
+
+export function editConcept(
+  docId: string,
+  conceptId: string,
+  changes: { name?: string; summary?: string }
+): Promise<Concept> {
+  return request(conceptPath(docId, conceptId), {
+    method: 'PATCH',
+    body: JSON.stringify(changes),
+  })
+}
+
+export function deleteConcept(docId: string, conceptId: string): Promise<void> {
+  return request(conceptPath(docId, conceptId), { method: 'DELETE' })
+}
+
+/** Make `conceptId` depend on `prereqId`. Rejected with 422 if it would form a cycle. */
+export function addPrereq(docId: string, conceptId: string, prereqId: string): Promise<void> {
+  return request(`${conceptPath(docId, conceptId)}/prereqs`, {
+    method: 'POST',
+    body: JSON.stringify({ prereq_id: prereqId }),
+  })
+}
+
+export function deletePrereq(docId: string, conceptId: string, prereqId: string): Promise<void> {
+  return request(`${conceptPath(docId, conceptId)}/prereqs/${encodeURIComponent(prereqId)}`, {
+    method: 'DELETE',
+  })
+}
+
+// Approves the reviewed graph: generates a question set per concept (one LLM call each,
+// so this is the slow one) and opens the chapter to study sessions.
+export function finalizeGraph(docId: string): Promise<UploadTextbookResponse> {
+  return request(`/api/textbook/${encodeURIComponent(docId)}/finalize`, { method: 'POST' })
 }

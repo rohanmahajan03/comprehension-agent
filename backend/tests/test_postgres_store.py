@@ -31,6 +31,7 @@ from app.models import (
     Concept,
     DependencyGraph,
     DiagnosisResult,
+    DocumentStatus,
     EvaluationResult,
     HistoryEntry,
     Question,
@@ -529,6 +530,83 @@ def test_list_documents_excludes_zero_concept_documents_and_reports_fields() -> 
     assert by_id["d1"].total_concepts == 2
     assert by_id["d2"].title is None
     assert by_id["d2"].total_concepts == 1
+
+
+def test_document_status_round_trips_and_finalizes(store: PostgresStore) -> None:
+    """The draft/finalized lifecycle against the real column — parity with
+    TestDocumentStatus in test_memory_store.py."""
+    store.save_document("d1", "text")
+    store.save_document("d2", "text", status=DocumentStatus.DRAFT)
+
+    assert store.get_document_status("d1") is DocumentStatus.FINALIZED
+    assert store.get_document_status("d2") is DocumentStatus.DRAFT
+    assert store.get_document_status("nope") is None
+
+    store.finalize_document("d2")
+    store.finalize_document("d2")  # idempotent
+    store.finalize_document("nope")  # unknown id matches no rows
+
+    assert store.get_document_status("d2") is DocumentStatus.FINALIZED
+
+
+def test_list_documents_excludes_drafts(store: PostgresStore) -> None:
+    """Both halves of the WHERE clause matter: a draft has concepts, so only the status
+    check keeps it out of the "your chapters" list."""
+    store.save_document("live", "text", "Live")
+    store.save_document("draft", "text", "Draft", status=DocumentStatus.DRAFT)
+    for doc_id in ("live", "draft"):
+        store.save_graph(
+            DependencyGraph(
+                doc_id=doc_id, concepts=[Concept(id=f"{doc_id}:a", name="A", summary="s")]
+            )
+        )
+
+    assert [r.id for r in store.list_documents()] == ["live"]
+
+    store.finalize_document("draft")
+    assert {r.id for r in store.list_documents()} == {"live", "draft"}
+
+
+def test_delete_concept_removes_the_row_and_cascades_to_its_questions(
+    store: PostgresStore,
+) -> None:
+    """`save_graph` only upserts, so graph editing needs a real delete. The questions
+    cascade is asserted in the database rather than through the store, so this proves the
+    FK fired instead of proving Python forgot the object."""
+    store.save_document("d1", "text", status=DocumentStatus.DRAFT)
+    store.save_graph(
+        DependencyGraph(
+            doc_id="d1",
+            concepts=[
+                Concept(id="d1:a", name="A", summary="s"),
+                Concept(id="d1:b", name="B", summary="s", depends_on=["d1:a"]),
+            ],
+        )
+    )
+    store.save_questions(
+        "d1:a",
+        [Question(id="d1:a:q1", concept_id="d1:a", prompt="p", expected_answer_notes="n")],
+    )
+
+    store.delete_concept("d1:a")
+
+    assert [c.id for c in store.get_graph("d1").concepts] == ["d1:b"]
+    with get_engine().connect() as conn:
+        remaining = conn.execute(
+            text("select count(*) from questions where concept_id = 'd1:a'")
+        ).scalar_one()
+    assert remaining == 0, "questions should have cascaded away with their concept"
+
+
+def test_delete_concept_unknown_id_is_a_noop(store: PostgresStore) -> None:
+    store.save_document("d1", "text")
+    store.save_graph(
+        DependencyGraph(doc_id="d1", concepts=[Concept(id="d1:a", name="A", summary="s")])
+    )
+
+    store.delete_concept("d1:ghost")
+
+    assert [c.id for c in store.get_graph("d1").concepts] == ["d1:a"]
 
 
 def test_save_document_resave_preserves_created_at() -> None:

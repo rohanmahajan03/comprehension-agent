@@ -22,8 +22,23 @@ export interface DependencyGraph {
   concepts: Concept[]
 }
 
+// Where a chapter sits in pipeline 1. 'draft' means the upload asked to review the graph:
+// it's extracted but not yet approved, so it has no questions and no study session can
+// start against it.
+export type DocumentStatus = 'draft' | 'finalized'
+
+// Response of POST /api/textbook and POST /api/textbook/{id}/finalize. `status` is what the
+// client routes on after an upload — 'draft' means the review screen. Taken from the
+// response rather than from the request's own `review` flag, so the server stays the one
+// authority on which pipeline actually ran.
+export interface UploadTextbookResponse {
+  doc_id: string
+  status: DocumentStatus
+}
+
 // One row of the "your chapters" list — GET /api/textbook. Unlike StudySessionSummary,
 // no split between an internal and public shape: total_concepts is a plain count.
+// Drafts never appear here (the server filters them), so there's no status field to check.
 export interface DocumentSummary {
   id: string
   // null when the chapter was uploaded without one; render text_snippet instead.

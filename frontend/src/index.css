@@ -199,6 +199,140 @@ button:disabled {
   }
 }
 
+/* The "review the graph first" opt-in under the upload form. A <label> wrapping the box
+   and its explanation, so the whole thing is one click target. */
+.upload-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+  margin: 0.5rem 0 0.25rem;
+  cursor: pointer;
+}
+
+.upload-option input[type="checkbox"] {
+  width: 1rem;
+  height: 1rem;
+  margin-top: 0.2rem;
+  flex-shrink: 0;
+  accent-color: #4b5bd7;
+  cursor: pointer;
+}
+
+.upload-option > span {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.upload-option small {
+  font-size: 0.85rem;
+  color: #555;
+}
+
+/* Review screen (draft chapters). Shares the .session-row footprint and the
+   confirm-in-place idiom with SessionList, so an edited concept and a deleted session
+   read as the same kind of control rather than two invented vocabularies. */
+.concept-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  padding: 0.75rem 1rem;
+  background: #f7f7fb;
+  border: 1px solid #e3e3ee;
+  border-radius: 8px;
+}
+
+.concept-row-editing {
+  background: #eef0fc;
+  border-color: #c9c9e0;
+}
+
+.concept-main {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 0.35rem;
+  min-width: 0;
+}
+
+.concept-main span,
+.concept-main small {
+  font-size: 0.85rem;
+  color: #555;
+}
+
+/* The inputs here sit inside a flex column that already spaces its children. */
+.concept-main input[type="text"],
+.concept-main textarea {
+  margin-bottom: 0;
+}
+
+.concept-actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-shrink: 0;
+}
+
+.concept-prereqs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.85rem;
+  color: #555;
+}
+
+.concept-prereqs-label {
+  color: #555;
+}
+
+.prereq-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.1rem 0.2rem 0.1rem 0.6rem;
+  border-radius: 999px;
+  background: #e7e9fb;
+  color: #2c3590;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.prereq-remove {
+  padding: 0 0.35rem;
+  background: transparent;
+  color: inherit;
+  font-size: 0.95rem;
+  line-height: 1;
+  border-radius: 999px;
+}
+
+.prereq-remove:hover:not(:disabled) {
+  background: #c9cef2;
+}
+
+.concept-prereqs select {
+  font: inherit;
+  font-size: 0.8rem;
+  padding: 0.15rem 0.4rem;
+  border: 1px solid #ccc;
+  border-radius: 999px;
+  background: white;
+  color: inherit;
+  cursor: pointer;
+}
+
+@media (max-width: 480px) {
+  .concept-row {
+    flex-direction: column;
+  }
+
+  .concept-actions {
+    justify-content: flex-end;
+    align-self: stretch;
+  }
+}
+
 .badge {
   display: inline-block;
   padding: 0.1rem 0.6rem;

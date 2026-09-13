@@ -8,6 +8,7 @@ from pydantic import BaseModel
 from app.models import (
     Answer,
     DiagnosisResult,
+    DocumentStatus,
     EvaluationResult,
     HistoryEntry,
     Question,
@@ -41,6 +42,14 @@ def start_study_session(payload: StudySessionStartRequest) -> StudySessionDetail
     graph = store.get_graph(payload.doc_id)
     if graph is None:
         raise HTTPException(status_code=404, detail=f"No graph found for doc '{payload.doc_id}'")
+    if store.get_document_status(payload.doc_id) is DocumentStatus.DRAFT:
+        # A draft has concepts but no questions yet, so the session would open on a
+        # concept with nothing to ask. Only chapters uploaded with `review` are ever DRAFT,
+        # so for every other chapter this branch is simply unreachable.
+        raise HTTPException(
+            status_code=409,
+            detail="Chapter is still in review; finalize its graph before studying it",
+        )
 
     ordered = topological_order(graph)
     study_session = StudySession(

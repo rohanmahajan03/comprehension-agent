@@ -1,6 +1,7 @@
 """Concept extraction + dependency graph construction (pipeline 1, step 2)."""
 
 import json
+from collections.abc import Callable, Iterable
 from functools import lru_cache
 from graphlib import TopologicalSorter
 from typing import TypedDict
@@ -113,8 +114,13 @@ def _client() -> anthropic.Anthropic:
     return anthropic.Anthropic(api_key=get_settings().llm_api_key)
 
 
-def _reachable(depends_on: dict[str, dict[str, str]], start: str, target: str) -> bool:
-    """Whether `target` can be reached from `start` by following depends_on edges."""
+def _reachable(neighbors: Callable[[str], Iterable[str]], start: str, target: str) -> bool:
+    """Whether `target` can be reached from `start` by following prerequisite edges.
+
+    Takes a neighbor lookup rather than a concrete mapping because the same walk runs over
+    two shapes: the raw `{id: {prereq_id: evidence}}` adjacency `build_graph()` assembles,
+    and the public `Concept.depends_on` lists `creates_cycle()` below walks.
+    """
     stack = [start]
     seen: set[str] = set()
     while stack:
@@ -124,8 +130,20 @@ def _reachable(depends_on: dict[str, dict[str, str]], start: str, target: str) -
         if node in seen:
             continue
         seen.add(node)
-        stack.extend(depends_on.get(node, {}))
+        stack.extend(neighbors(node))
     return False
+
+
+def creates_cycle(graph: DependencyGraph, frm: str, to: str) -> bool:
+    """Whether adding an edge where `to` depends on `frm` would introduce a cycle — i.e.
+    whether `frm` already, transitively, depends on `to`.
+
+    Public so the graph-editing endpoints (`routers/graph_edit.py`) reject a hand-added
+    edge on exactly the terms `build_graph()` rejects an LLM-extracted one. The DAG
+    invariant is load-bearing either way: `topological_order` would raise on a cycle.
+    """
+    by_id = {c.id: c for c in graph.concepts}
+    return _reachable(lambda node: by_id[node].depends_on if node in by_id else [], frm, to)
 
 
 def _extract_raw_graph(text: str) -> RawGraph:
@@ -172,7 +190,7 @@ def build_graph(doc_id: str, text: str) -> DependencyGraph:
     deps: dict[str, dict[str, str]] = {c["id"]: {} for c in raw["concepts"]}
     for edge in raw["edges"]:
         frm, to = edge["from"], edge["to"]
-        if _reachable(deps, frm, to):
+        if _reachable(lambda node: deps.get(node, {}), frm, to):
             continue
         deps[to][frm] = edge["evidence"]
 

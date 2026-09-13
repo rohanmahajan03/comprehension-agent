@@ -14,6 +14,7 @@ from datetime import UTC, datetime, timedelta
 from app.models import (
     Concept,
     DependencyGraph,
+    DocumentStatus,
     Question,
     StudySession,
     StudySessionStatus,
@@ -246,3 +247,127 @@ class TestListDocuments:
         store.save_document("d", "revised text", "New title")
 
         assert store.list_documents()[0].created_at == original
+
+    def test_excludes_drafts_even_though_they_have_concepts(self) -> None:
+        """A draft is past extraction but has no questions and can't host a session, so
+        offering it as a chapter to study would hand the student a dead end."""
+        store = InMemoryStore()
+        self._save(store, "finalized", concepts=2)
+        self._save(store, "draft", concepts=2)
+        store.save_document("draft", "Chapter text for draft.", "T", status=DocumentStatus.DRAFT)
+
+        assert [row.id for row in store.list_documents()] == ["finalized"]
+
+        store.finalize_document("draft")
+        assert {row.id for row in store.list_documents()} == {"finalized", "draft"}
+
+
+class TestDocumentStatus:
+    """The draft/finalized lifecycle review mode introduces."""
+
+    def test_documents_are_finalized_unless_asked_otherwise(self) -> None:
+        # The default is what keeps every caller that predates review mode unchanged.
+        store = InMemoryStore()
+        store.save_document("d", "text")
+
+        assert store.get_document_status("d") is DocumentStatus.FINALIZED
+
+    def test_draft_status_round_trips(self) -> None:
+        store = InMemoryStore()
+        store.save_document("d", "text", status=DocumentStatus.DRAFT)
+
+        assert store.get_document_status("d") is DocumentStatus.DRAFT
+
+    def test_finalize_moves_a_draft_forward_and_is_idempotent(self) -> None:
+        store = InMemoryStore()
+        store.save_document("d", "text", status=DocumentStatus.DRAFT)
+
+        store.finalize_document("d")
+        store.finalize_document("d")
+
+        assert store.get_document_status("d") is DocumentStatus.FINALIZED
+
+    def test_unknown_ids_report_none_and_finalize_quietly(self) -> None:
+        store = InMemoryStore()
+
+        assert store.get_document_status("nope") is None
+        store.finalize_document("nope")  # no-op, matching the delete_* contracts
+        assert store.get_document_status("nope") is None
+
+    def test_deleting_a_document_forgets_its_status(self) -> None:
+        store = InMemoryStore()
+        store.save_document("d", "text", status=DocumentStatus.DRAFT)
+
+        store.delete_document("d")
+
+        assert store.get_document_status("d") is None
+
+
+class TestDeleteConcept:
+    """Graph editing's one mutation `save_graph` can't express: it only ever upserts the
+    concepts it is handed and never deletes the ones missing from that list."""
+
+    def _populate(self, store: InMemoryStore) -> None:
+        store.save_document("d", "text", status=DocumentStatus.DRAFT)
+        store.save_graph(
+            DependencyGraph(
+                doc_id="d",
+                concepts=[
+                    Concept(id="d:a", name="A", summary="s"),
+                    Concept(id="d:b", name="B", summary="s", depends_on=["d:a"]),
+                ],
+            )
+        )
+
+    def test_removes_the_concept_from_its_graph(self) -> None:
+        store = InMemoryStore()
+        self._populate(store)
+
+        store.delete_concept("d:a")
+
+        assert [c.id for c in store.get_graph("d").concepts] == ["d:b"]
+
+    def test_drops_the_concepts_questions_too(self) -> None:
+        """The hand-rolled stand-in for the concepts→questions ON DELETE CASCADE."""
+        store = InMemoryStore()
+        self._populate(store)
+        store.save_questions(
+            "d:a", [Question(id="d:a:q1", concept_id="d:a", prompt="p", expected_answer_notes="n")]
+        )
+
+        store.delete_concept("d:a")
+
+        assert store.get_questions("d:a") is None
+
+    def test_unknown_ids_are_a_noop(self) -> None:
+        store = InMemoryStore()
+        self._populate(store)
+
+        store.delete_concept("d:ghost")
+        store.delete_concept("no_such_doc:a")
+
+        assert len(store.get_graph("d").concepts) == 2
+
+
+class TestGetQuestions:
+    """[] and None mean different things here, and PostgresStore has always drawn the line
+    this way — a concept that exists but has no questions yet is not a missing concept.
+    Only review mode made the distinction reachable, by saving a graph before any
+    question set exists for it."""
+
+    def test_a_concept_with_no_questions_yet_reports_an_empty_list(self) -> None:
+        store = InMemoryStore()
+        store.save_graph(
+            DependencyGraph(doc_id="d", concepts=[Concept(id="d:a", name="A", summary="s")])
+        )
+
+        assert store.get_questions("d:a") == []
+
+    def test_an_unknown_concept_reports_none(self) -> None:
+        store = InMemoryStore()
+        store.save_graph(
+            DependencyGraph(doc_id="d", concepts=[Concept(id="d:a", name="A", summary="s")])
+        )
+
+        assert store.get_questions("d:ghost") is None
+        assert store.get_questions("other_doc:a") is None

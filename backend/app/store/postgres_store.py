@@ -12,7 +12,7 @@ design's §3, a graph write must never touch questions; only `save_questions` do
 
 from datetime import UTC, datetime
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import selectinload
 
@@ -23,6 +23,7 @@ from app.models import (
     Concept,
     DependencyGraph,
     DiagnosisResult,
+    DocumentStatus,
     DocumentSummary,
     EvaluationResult,
     HistoryEntry,
@@ -55,12 +56,24 @@ def _to_concept(row: ConceptRow) -> Concept:
 
 
 class PostgresStore(Store):
-    def save_document(self, doc_id: str, text: str, title: str | None = None) -> None:
+    def save_document(
+        self,
+        doc_id: str,
+        text: str,
+        title: str | None = None,
+        status: DocumentStatus = DocumentStatus.FINALIZED,
+    ) -> None:
         with session_scope() as session:
-            stmt = pg_insert(DocumentRow).values(id=doc_id, text=text, title=title)
+            stmt = pg_insert(DocumentRow).values(
+                id=doc_id, text=text, title=title, status=status.value
+            )
             stmt = stmt.on_conflict_do_update(
                 index_elements=["id"],
-                set_={"text": stmt.excluded.text, "title": stmt.excluded.title},
+                set_={
+                    "text": stmt.excluded.text,
+                    "title": stmt.excluded.title,
+                    "status": stmt.excluded.status,
+                },
             )
             session.execute(stmt)
 
@@ -68,6 +81,20 @@ class PostgresStore(Store):
         with session_scope() as session:
             row = session.get(DocumentRow, doc_id)
             return row.text if row else None
+
+    def get_document_status(self, doc_id: str) -> DocumentStatus | None:
+        with session_scope() as session:
+            row = session.get(DocumentRow, doc_id)
+            return DocumentStatus(row.status) if row else None
+
+    def finalize_document(self, doc_id: str) -> None:
+        """One UPDATE; an unknown id matches no rows, which is the required no-op."""
+        with session_scope() as session:
+            session.execute(
+                update(DocumentRow)
+                .where(DocumentRow.id == doc_id)
+                .values(status=DocumentStatus.FINALIZED.value)
+            )
 
     def delete_document(self, doc_id: str) -> None:
         """One statement is a full cleanup: concepts, questions, and study sessions all
@@ -78,8 +105,8 @@ class PostgresStore(Store):
             session.execute(delete(DocumentRow).where(DocumentRow.id == doc_id))
 
     def list_documents(self) -> list[DocumentSummary]:
-        """Documents with at least one concept, most recently created first — see the
-        Store ABC docstring for why zero-concept documents are excluded.
+        """Finalized documents with at least one concept, most recently created first —
+        see the Store ABC docstring for why zero-concept and draft documents are excluded.
 
         The concept-count subquery is reused in both the select list and the WHERE
         clause (SQLAlchemy correlates each occurrence independently), rather than
@@ -100,7 +127,10 @@ class PostgresStore(Store):
                     total_concepts.label("total_concepts"),
                     DocumentRow.created_at,
                 )
-                .where(total_concepts > 0)
+                .where(
+                    total_concepts > 0,
+                    DocumentRow.status == DocumentStatus.FINALIZED.value,
+                )
                 .order_by(DocumentRow.created_at.desc())
             ).all()
 
@@ -154,6 +184,16 @@ class PostgresStore(Store):
                 # graph_builder cannot produce zero concepts from non-empty chapter text.)
                 return None
             return DependencyGraph(doc_id=doc_id, concepts=[_to_concept(r) for r in rows])
+
+    def delete_concept(self, concept_id: str) -> None:
+        """One statement: the concept's questions reach it through ON DELETE CASCADE
+        (app/db/models.py). Deleting an unknown id is a no-op.
+
+        The cascade is moot in practice — a concept is only deletable while its document
+        is still a draft, which is before question generation has run at all.
+        """
+        with session_scope() as session:
+            session.execute(delete(ConceptRow).where(ConceptRow.id == concept_id))
 
     def save_questions(self, concept_id: str, questions: list[Question]) -> None:
         """Upsert every question in `questions`. Deliberately does NOT delete rows for this

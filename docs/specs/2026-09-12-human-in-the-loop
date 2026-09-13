@@ -1,7 +1,7 @@
 # Instructor graph review mode — design
 
-**Status:** proposed (not yet implemented)
-**Scope:** adds an opt-in "review mode" that pauses pipeline 1 after `graph_builder.build_graph()` so a human can edit the extracted concept graph (add/edit/delete concepts, add/delete prerequisite edges) before `question_generator.generate_questions()` runs. Off by default — with the mode disabled, ingestion is byte-for-byte what it is today. Touches `backend/app/config.py`, `backend/app/models/schemas.py`, `backend/app/services/graph_builder.py`, `backend/app/store/memory_store.py`, `backend/app/store/postgres_store.py`, `backend/app/db/models.py` (+ one Alembic migration), `backend/app/routers/ingestion.py`, a new `backend/app/routers/graph_edit.py`, `backend/app/routers/study_session.py`, `backend/app/main.py`, and on the frontend `frontend/src/types/index.ts`, `frontend/src/api/client.ts`, a new `frontend/src/pages/ReviewGraphPage.tsx`, `frontend/src/App.tsx`, `frontend/src/pages/MenuPage.tsx`, `frontend/src/components/DocumentList.tsx`, `frontend/src/index.css`.
+**Status:** implemented and verified, against both store backends. §2's gating was revised after the first implementation — a deployment-wide `GRAPH_EDIT_MODE` env var became a per-upload checkbox — see that section for why. Deviations found while building are in §11.
+**Scope:** adds an opt-in "review mode" that pauses pipeline 1 after `graph_builder.build_graph()` so a human can edit the extracted concept graph (add/edit/delete concepts, add/delete prerequisite edges) before `question_generator.generate_questions()` runs. Off by default — an upload that doesn't ask for review is byte-for-byte what it is today. Touches `backend/app/models/schemas.py`, `backend/app/services/graph_builder.py`, `backend/app/store/memory_store.py`, `backend/app/store/postgres_store.py`, `backend/app/db/models.py` (+ one Alembic migration), `backend/app/routers/ingestion.py`, a new `backend/app/routers/graph_edit.py`, `backend/app/routers/study_session.py`, `backend/app/main.py`, and on the frontend `frontend/src/types/index.ts`, `frontend/src/api/client.ts`, a new `frontend/src/pages/ReviewGraphPage.tsx`, `frontend/src/App.tsx`, `frontend/src/pages/MenuPage.tsx`, `frontend/src/components/DocumentList.tsx`, `frontend/src/index.css`.
 
 ## 1. Context
 
@@ -9,30 +9,29 @@
 
 This has to be opt-in. Most uploads should keep going straight through — review is for someone curating a chapter they intend to reuse across many students, not for casual use. The mode gates the *entire* review workflow behind one flag; nothing about default behavior changes when it's off.
 
-## 2. Gating: `GRAPH_EDIT_MODE`
+## 2. Gating: `review` on the upload
 
-One new setting, same pattern as `database_url` (`backend/app/config.py`):
+**Revised after the first implementation — see the note at the end of this section for what this replaced and why.**
 
-```python
-class Settings(BaseSettings):
-    ...
-    # Unset (default) = ingestion behaves exactly as today. Set = uploads pause after
-    # graph extraction for human review before questions are generated.
-    graph_edit_mode: bool = False
-```
-
-Instance-wide, not per-request and not per-user — there's no auth in this app (CLAUDE.md's "Not built yet" section), so there's no notion of "instructor" to gate on. This mirrors `DATABASE_URL`: an environment-level toggle for how this deployment behaves, not a runtime choice a caller makes. (A per-upload `?review=true` query flag was considered — rejected because it would let *any* caller silently skip question generation on *any* deployment, including ones the operator never intended to allow that on. An env var means only whoever configures the instance decides.)
-
-The frontend has no way to see env vars, so it needs a way to ask. New endpoint, next to the existing health check:
+Review is a per-upload choice, expressed as one field on the existing upload payload (`backend/app/routers/ingestion.py`):
 
 ```python
-# backend/app/main.py
-@app.get("/api/config")
-def config() -> dict[str, bool]:
-    return {"graph_edit_mode": settings.graph_edit_mode}
+class TextbookUpload(BaseModel):
+    text: str = Field(min_length=1, description="Raw chapter text")
+    title: str | None = None
+    review: bool = Field(
+        default=False,
+        description="Stop after graph extraction so the concept graph can be edited, "
+        "instead of generating questions immediately. The chapter stays a DRAFT until "
+        "POST /api/textbook/{doc_id}/finalize.",
+    )
 ```
 
-Every mutating endpoint below *also* re-checks the flag server-side and 404s if it's off — the frontend config check is for UI branching, not enforcement. A disabled feature reads as "this route doesn't exist" (404) rather than 403, since there's no auth to make a 403 meaningful and "not there by default" should mean exactly that.
+Default `False`, so a client that has never heard of the field gets exactly the pipeline it always got. On the frontend it's a checkbox under the upload form, unticked by default (§7).
+
+Because the choice is recorded as the chapter's own `DocumentStatus`, **draft status is then the entire gate** on everything downstream. The editing endpoints don't consult any setting; they ask whether *this chapter* is a draft. A chapter uploaded without `review` is `FINALIZED` from the moment it exists, so it's refused by the editing endpoints on exactly the same terms as a chapter whose review was already approved — same 409, same message. There is no second switch to keep in sync with the first, and no state where the feature is "on" but a given chapter isn't editable for a different reason.
+
+**What this replaced.** This shipped first as `GRAPH_EDIT_MODE`, a deployment-wide env var on `Settings` alongside `database_url`, with every mutating endpoint 404ing when it was off and a `GET /api/config` for the frontend to discover it. The reasoning was that a per-upload flag "would let any caller silently skip question generation on any deployment, including ones the operator never intended to allow that on." That argument doesn't survive contact with this app: there is no auth, so the caller *is* the operator, and the thing being protected — spending fewer LLM calls, then being asked to approve a graph — isn't a privilege. What the env var actually bought was a feature nobody could reach without editing `.env` and restarting the backend, for a decision that belongs to whoever is uploading a specific chapter. Removing it deleted a setting, an endpoint, a 404 branch in two routers, and a test fixture that had to patch `lru_cache`d settings per router module.
 
 ## 3. Data model changes
 
@@ -44,7 +43,7 @@ class DocumentStatus(str, Enum):
     FINALIZED = "finalized"
 ```
 
-A document is `DRAFT` from the moment `graph_edit_mode` is on and its graph has been extracted but not yet approved; `FINALIZED` once questions exist and it's usable for study sessions. When the mode is off, every document goes straight to `FINALIZED`, same as today — no document is ever observably `DRAFT` in a deployment that never turned the mode on.
+A document is `DRAFT` from the moment an upload asks for `review` and its graph has been extracted but not yet approved; `FINALIZED` once questions exist and it's usable for study sessions. An upload that doesn't ask for review goes straight to `FINALIZED`, same as today — nothing is ever observably `DRAFT` unless someone chose it for that chapter.
 
 `Store` ABC changes (`backend/app/store/memory_store.py`):
 
@@ -160,15 +159,14 @@ def upload_textbook(payload: TextbookUpload) -> TextbookUploadResponse:
 
     store = get_store()
     doc_id = uuid.uuid4().hex[:12]
-    edit_mode = get_settings().graph_edit_mode
-    status = DocumentStatus.DRAFT if edit_mode else DocumentStatus.FINALIZED
+    status = DocumentStatus.DRAFT if payload.review else DocumentStatus.FINALIZED
     store.save_document(doc_id, payload.text, payload.title, status=status)
 
     try:
         graph = graph_builder.build_graph(doc_id, payload.text)
         if not graph.concepts:
             raise HTTPException(status_code=422, detail="...")  # unchanged
-        if edit_mode:
+        if payload.review:
             # Pause here for review — persist the as-extracted graph and stop short of
             # question generation. POST /api/textbook/{doc_id}/finalize resumes this.
             store.save_graph(graph)
@@ -196,8 +194,6 @@ def get_document_status(doc_id: str) -> DocumentStatusResponse:
 
 @router.post("/{doc_id}/finalize", response_model=TextbookUploadResponse)
 def finalize_textbook(doc_id: str) -> TextbookUploadResponse:
-    if not get_settings().graph_edit_mode:
-        raise HTTPException(status_code=404, detail="Not found")
     store = get_store()
     current = store.get_document_status(doc_id)
     if current is None:
@@ -212,7 +208,7 @@ def finalize_textbook(doc_id: str) -> TextbookUploadResponse:
     return TextbookUploadResponse(doc_id=doc_id, status=DocumentStatus.FINALIZED)
 ```
 
-`GET .../status` is left ungated by the flag (harmless to expose; a client re-checking status after a page reload shouldn't itself require the mode to still be on). `POST .../finalize` mirrors the empty-graph rejection `upload_textbook` already has.
+`GET .../status` is the only way to observe a draft's state at all — `list_documents()` hides drafts and `GET /api/graph/{id}` doesn't say which side of finalize a chapter is on. `POST .../finalize` mirrors the empty-graph rejection `upload_textbook` already has, and 409s on a chapter that is already finalized (whether by approval or by never having asked for review).
 
 `study_session.py`'s `start_study_session` needs one new guard, right after the existing graph-not-found check:
 ```python
@@ -223,20 +219,27 @@ This is unconditional (no flag check needed) — when the mode is off, no docume
 
 ## 5. Backend — graph mutation endpoints
 
-New router, `backend/app/routers/graph_edit.py`, registered in `main.py` alongside the others. One shared dependency does all three guards every mutating endpoint needs (flag on, document is a draft, graph exists):
+New router, `backend/app/routers/graph_edit.py`, registered in `main.py` alongside the others. One shared dependency does every guard these endpoints need — the document exists, is still a draft, and has a graph:
 
 ```python
 def _draft_graph(doc_id: str) -> tuple[Store, DependencyGraph]:
-    if not get_settings().graph_edit_mode:
-        raise HTTPException(status_code=404, detail="Not found")
     store = get_store()
-    if store.get_document_status(doc_id) != DocumentStatus.DRAFT:
-        raise HTTPException(status_code=409, detail="Document is not in review")
+    status = store.get_document_status(doc_id)
+    if status is None:
+        raise HTTPException(status_code=404, detail=f"No document '{doc_id}'")
+    if status is not DocumentStatus.DRAFT:
+        raise HTTPException(
+            status_code=409,
+            detail="Chapter is finalized; its graph is locked. Upload with review enabled "
+            "to edit a graph before its questions are written.",
+        )
     graph = store.get_graph(doc_id)
     if graph is None:
         raise HTTPException(status_code=404, detail=f"No graph found for doc '{doc_id}'")
     return store, graph
 ```
+
+The 409's message names the fix because the likeliest way to reach it is a forgotten checkbox, not a client bug.
 
 ```python
 class NewConceptPayload(BaseModel):
@@ -377,7 +380,9 @@ export interface UploadTextbookResponse {
 }
 ```
 
-**`client.ts`:** update `uploadTextbook`'s return type to `UploadTextbookResponse`; add `getConfig()`, `getDocumentStatus(docId)`, `addConcept`, `editConcept`, `deleteConcept`, `addEdge`, `deleteEdge`, `finalizeGraph(docId)` — same `request<T>` helper, same shape as the existing calls.
+**`client.ts`:** `uploadTextbook(text, title?, review = false)` returning `UploadTextbookResponse`; plus `addConcept`, `editConcept`, `deleteConcept`, `addPrereq`, `deletePrereq`, `finalizeGraph(docId)` — same `request<T>` helper, same shape as the existing calls.
+
+**`MenuPage.tsx`** carries the opt-in: a `<label className="upload-option">` under the textarea wrapping a checkbox and its explanation (one click target), with `review` state defaulting to `false`. The submit button relabels to "Extract concepts" when it's ticked, since that is then all the request does.
 
 **A fourth page**, `ReviewGraphPage.tsx` — not a mode bolted onto `GraphView.tsx`. `GraphView` is a read-only viewer plus a "start session" CTA; review needs edit forms and *no* start-session affordance at all (blocked server-side anyway per §4), so the two have little in common beyond both fetching a `DependencyGraph`. `App.tsx`'s own comment already anticipated this exact moment — its plain-state router was deliberately kept simple "with three pages," noting "revisit when a fourth page appears." This is that fourth page.
 
@@ -415,10 +420,64 @@ onOpenDocument={(id, status) => {
 
 - **`backend/tests/test_graph_builder.py` (new)** — free, no LLM calls: unit tests for `creates_cycle()` (rejects an edge that would close a cycle, accepts one that wouldn't, handles unknown ids) and, incidentally, the first dedicated unit-test file `graph_builder.py`'s pure logic has had (today it's only exercised indirectly via `conftest.py`'s stub and the billed `graph_geval` suite).
 - **`backend/tests/test_memory_store.py` / `test_postgres_store.py`** — new coverage: `save_document(..., status=DRAFT)` round-trips through `get_document_status`; `finalize_document` flips it (and no-ops on an already-finalized or unknown id); `delete_concept` removes the row and is idempotent; `list_documents()` excludes a draft even though it has concepts.
-- **`backend/tests/test_flow.py`** — HTTP-level, with `graph_edit_mode` monkeypatched on: upload → `status: "draft"` in the response → `GET /api/graph/{id}` shows the extracted graph → mutation endpoints (add/edit/delete concept, add/delete edge) work and reject a cycle-forming edge with 422 → `POST .../finalize` generates questions and flips status → `POST /api/study-session/start` succeeds afterward. Separately, with the flag at its default (off): every mutating endpoint 404s, and `POST /api/study-session/start` against a draft-flagged doc built with the flag *on* in an earlier test 409s if attempted before finalize.
-  - Gotcha to flag: `get_settings()` is `@lru_cache`d and imported via `from app.config import get_settings` into each router module, so a test override has to patch the name where it's *used* (`monkeypatch.setattr("app.routers.ingestion.get_settings", ...)`, and likewise for `app.routers.graph_edit` and `app.routers.study_session`), not `app.config.get_settings` itself.
+- **`backend/tests/test_graph_review.py`** — HTTP-level: upload with `"review": true` → `status: "draft"` in the response → `GET /api/graph/{id}` shows the extracted graph → every mutation works and a cycle-forming prerequisite is rejected with 422 → `POST .../finalize` generates questions and flips status → `POST /api/study-session/start` succeeds afterward. And on the default path: an upload without `review` (or omitting the field entirely) finalizes immediately, and every editing endpoint 409s against it.
+  - Passing `review` per request means no fixture and no settings patching. Under the env-var design this needed a fixture that patched `get_settings` on each *router module* separately, because `from app.config import get_settings` binds a copy at import time and the function is `lru_cache`d — one of the smaller reasons the per-upload flag is better.
 - No changes needed to `tests/conftest.py`'s stubs — this feature sits entirely between `build_graph()` and `generate_questions()`, calling neither differently than before; the stubs remain valid for every existing test.
 
 ## 10. What's implemented vs. pending
 
-Nothing is implemented yet — this is the design to review before writing code.
+Everything in §2–§9 is implemented, with the deviations in §11 below. Verified: the free
+backend suite passes (84 tests, up from 52), the frontend builds clean, and the whole flow
+was driven in a browser against an isolated stub-backed instance (the same throwaway-backend
+technique the delete-study-session design used for UI work) — upload → draft review screen →
+edit a concept, add and remove prerequisites, delete a concept and watch its dependents lose
+it, add a concept, get a cycle rejected → approve → questions generated against the *edited*
+graph → tutoring session starts on it, beginning at the concept that topological order
+promotes once `limits` is deleted. Mobile layout checked at 390px (rows stack, no horizontal
+scroll).
+
+**The PostgresStore half is verified too**, after an initial gap: Docker wasn't running when
+this was built, so the migration was hand-written rather than autogenerated and nothing here
+had touched a real database. Both have since run. `docker compose up` applied
+`d26c56635e35 -> c1e4a9b7f20d` to the working database on backend startup — `documents.status`
+is `character varying not null default 'finalized'`, and every pre-existing row backfilled to
+`finalized`, which is what the `server_default` is for. `tests/test_postgres_store.py` passes
+22/22 against a real instance, the four new cases included (status round-trip and
+`finalize_document`'s idempotence, `list_documents` excluding a draft that *has* concepts, and
+`delete_concept` both cascading to its questions — asserted with raw SQL, so it proves the FK
+fired rather than that Python forgot the object — and no-opping on an unknown id).
+
+## 11. Deviations from this design, found while building it
+
+- **No `GET /api/config`, and no `GRAPH_EDIT_MODE` setting at all.** The endpoint was cut
+  first (nothing called it — the upload response's `status` already drives routing), and the
+  env var behind it was then replaced entirely by the per-upload `review` field, which is
+  what §2 now describes. Net effect on the code: `Settings` is unchanged from before this
+  feature, and the 404-when-disabled branch is gone from both routers — `DRAFT` status is
+  the only gate left.
+- **No `status` field on `DocumentSummary`** (§3, §7). `list_documents()` filters drafts
+  out, so the field would be permanently `'finalized'` — plumbed through both stores and the
+  TS types to change nothing. `DocumentList.tsx` is untouched for the same reason;
+  `onOpenDocument`'s `status` argument is optional and only the upload path passes it.
+- **Prerequisites are a sub-resource, not an `/edges` collection** (§5). `POST
+  /api/graph/{doc}/concepts/{id}/prereqs` with `{"prereq_id": …}`, and `DELETE
+  /api/graph/{doc}/concepts/{id}/prereqs/{prereq_id}`. Avoids a DELETE with a body, and
+  drops the direction convention a reader would otherwise have to hold (`{from, to}`, where
+  A → B means "B depends on A"). The router is mounted at `prefix="/api/graph"`, the
+  `study_session.py` style, rather than declaring full paths under `prefix="/api"`.
+- **`InMemoryStore.get_questions` now distinguishes `[]` from `None`.** PostgresStore has
+  always drawn that line ("concept exists, no questions yet" vs "no such concept"), but
+  InMemoryStore's raw dict lookup couldn't — invisible until now, since before review mode
+  every saved concept got its questions in the same request. A draft concept is the first
+  case that separates them, and the two backends would have answered the same request 200
+  vs 404.
+- **The cycle rejection names concepts rather than ids**, and `ReviewGraphPage` unwraps
+  FastAPI's `{"detail": …}` for display (`failureMessage()`). Both because hitting the cycle
+  rule is an ordinary reviewer interaction, not a crash: what the browser actually showed
+  first was `422 Unprocessable Content: {"detail":"'abc123:derivatives' already depends
+  on…"}`. The shared `request()` helper is unchanged, so no other page's error text moved.
+- **Review-mode HTTP tests live in `backend/tests/test_graph_review.py`**, not appended to
+  `test_flow.py` (§9) — the one-file-per-feature split `test_diagnoser_loop.py` already
+  follows, and it keeps the `review_mode` fixture beside the only tests that use it.
+- **Nothing new in `.env.example`.** It briefly documented `GRAPH_EDIT_MODE`; that entry
+  was removed along with the setting.

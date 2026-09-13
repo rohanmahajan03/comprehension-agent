@@ -23,6 +23,11 @@ class DocumentRow(Base):
     # upload field it comes from is itself optional. The client renders a text snippet
     # when it's NULL rather than the API inventing a label.
     title: Mapped[str | None]
+    # A DocumentStatus value, stored as a plain string and converted at the PostgresStore
+    # boundary — same treatment as StudySessionRow.status, and for the same reason (no
+    # schemas.py import down here). server_default finalizes every row that predates this
+    # column, which is right: they all completed the full pipeline before review existed.
+    status: Mapped[str] = mapped_column(server_default="finalized")
     # server_default backfills rows that predate this column. Unlike StudySessionRow's
     # timestamps, no Python code ever writes this explicitly: PostgresStore.save_document's
     # upsert omits it from on_conflict_do_update's set_, so a re-save preserves the value

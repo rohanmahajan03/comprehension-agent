@@ -41,6 +41,19 @@ class DependencyGraph(BaseModel):
     concepts: list[Concept] = Field(default_factory=list)
 
 
+class DocumentStatus(str, Enum):
+    """Where a chapter sits in pipeline 1.
+
+    DRAFT means its graph has been extracted but not yet approved, so no questions exist
+    for it and no study session can start against it. Only reachable by uploading with
+    `TextbookUpload.review` set; otherwise a document is FINALIZED from the moment it's
+    created. See docs/specs/2026-09-12-human-in-the-loop §3.
+    """
+
+    DRAFT = "draft"
+    FINALIZED = "finalized"
+
+
 class DocumentSummary(BaseModel):
     """One row of the "your chapters" list.
 

@@ -1,20 +1,25 @@
 import { useState } from 'react'
 import { GraphView } from './pages/GraphView'
 import { MenuPage } from './pages/MenuPage'
+import { ReviewGraphPage } from './pages/ReviewGraphPage'
 import { StudySessionPage } from './pages/StudySessionPage'
-import type { StudySessionSummary } from './types'
+import type { DocumentStatus, StudySessionSummary } from './types'
 
 // Plain state instead of a router. The pages are no longer strictly linear — resuming a
-// session jumps from the menu straight to 'session', skipping 'graph' — but with three
-// pages and two entry points the whole navigation graph still fits in two state fields.
+// session jumps from the menu straight to 'session', skipping 'graph' — but the whole
+// navigation graph still fits in two state fields.
 //
 // What a router would buy: working browser-back, refresh-survival, and URLs as the
 // discriminator instead of the `&& docId` guards below. Deliberately deferred (see
 // docs/specs/2026-08-29-resume-study-session-design.md §9): refresh costs two clicks
 // rather than data, since sessions are persisted server-side, and the frontend has no
-// test runner to catch a regression from converting every page to route params. Revisit
-// when a fourth page appears or auth makes URLs meaningful.
-type Page = 'menu' | 'graph' | 'session'
+// test runner to catch a regression from converting every page to route params.
+//
+// 'review' is the fourth page that note said to revisit at. Still deferred: it adds no new
+// entry point — a draft is reachable only from the upload that created it, which is the one
+// navigation a router would change nothing about. Auth, or any page reachable by link, is
+// the real trigger.
+type Page = 'menu' | 'graph' | 'review' | 'session'
 
 export default function App() {
   const [page, setPage] = useState<Page>('menu')
@@ -37,13 +42,18 @@ export default function App() {
       </h1>
       {page === 'menu' && (
         <MenuPage
-          onOpenDocument={(id) => {
+          onOpenDocument={(id, status: DocumentStatus = 'finalized') => {
             setDocId(id)
             setResumeSessionId(null)
-            setPage('graph')
+            // A fresh upload comes back 'draft' only when the uploader asked to review the
+            // graph; chapters opened from the list are never drafts (the server hides them).
+            setPage(status === 'draft' ? 'review' : 'graph')
           }}
           onResume={resume}
         />
+      )}
+      {page === 'review' && docId && (
+        <ReviewGraphPage docId={docId} onFinalized={() => setPage('graph')} />
       )}
       {page === 'graph' && docId && (
         <GraphView
