@@ -46,9 +46,14 @@ def fake_clients(monkeypatch: pytest.MonkeyPatch) -> None:
         )
 
     def fake_judge(**kwargs: object) -> SimpleNamespace:
-        # Superset of both judge schemas; each caller reads only its own key.
+        # Superset of all three judge schemas; each caller reads only its own key.
         return _fake_response(
-            {"grounded": True, "answers_question": True, "reasoning": "fine"}
+            {
+                "grounded": True,
+                "answers_question": True,
+                "on_target": True,
+                "reasoning": "fine",
+            }
         )
 
     monkeypatch.setattr(
@@ -77,6 +82,11 @@ def test_score_case_path_executes_and_all_checks_report(fake_clients: None) -> N
     assert result.type_recall >= 0.0 and result.missed_types_message()
     assert result.evidence_basis_rate == 1.0 and result.evidence_basis_message()
     assert result.answer_quality_rate == 1.0 and result.answer_quality_message()
+    assert result.target_focus_rate == 1.0 and result.target_focus_message()
+    # Target focus only scores concepts that were sent a neighbour, so this must be a
+    # strict subset of the questions generated — if it ever equals the full set, the
+    # "nothing to drift onto" skip has stopped working.
+    assert 0 < len(result.target_focus_judgments) < len(result.evidence_basis_judgments)
 
 
 def test_grounding_check_catches_model_typed_text(fake_clients: None) -> None:

@@ -13,6 +13,7 @@ from app.config import get_settings
 from .support import (
     ANSWER_QUALITY_THRESHOLD,
     EVIDENCE_BASIS_THRESHOLD,
+    TARGET_FOCUS_THRESHOLD,
     TYPE_RECALL_THRESHOLD,
 )
 
@@ -62,6 +63,11 @@ def pytest_terminal_summary(terminalreporter: pytest.TerminalReporter) -> None:
         f"(threshold {ANSWER_QUALITY_THRESHOLD}, {len(result.unanswered_questions)} flagged)"
     )
     terminalreporter.write_line(
+        f"target focus:         {result.target_focus_rate:.2f} "
+        f"(threshold {TARGET_FOCUS_THRESHOLD}, {len(result.off_target_questions)} off-target, "
+        f"{len(result.target_focus_judgments)}/{total} scored)"
+    )
+    terminalreporter.write_line(
         f"deterministic checks: {len(result.grounding_violations)} grounding, "
         f"{len(result.expected_answer_violations)} expected-answer violations"
     )
@@ -74,4 +80,8 @@ def pytest_terminal_summary(terminalreporter: pytest.TerminalReporter) -> None:
     for j in result.unanswered_questions:
         terminalreporter.write_line(
             f"  weak answer: {j.concept_id} [{j.question['type']}]"
+        )
+    for j in result.off_target_questions:
+        terminalreporter.write_line(
+            f"  off-target: {j.concept_id} [{j.question['type']}] {j.question['question'][:70]}…"
         )

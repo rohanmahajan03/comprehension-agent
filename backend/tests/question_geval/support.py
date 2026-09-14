@@ -71,9 +71,49 @@ unusable rubric, and until these existed nothing tested that half of the output:
    the correct answer is the student's own), and closely restating the evidence is
    right for conceptual_correctness (where the ideal answer largely is that).
 
+Check 6 covers *which concept* a question is about, which nothing else here does:
+
+6. Target focus (LLM-judged, `claude-haiku-4-5`) — does the question assess the concept it
+   was written for, or a neighbour that was only supplied as context? `source_passages()`
+   deliberately sends prerequisites and siblings so `conceptual_distinction` is possible at
+   all, and the prompt's "every evidence passage you may draw on" invites using them, but
+   nothing before this asked whether the question stayed on its own concept. Two things
+   break when it doesn't: the question wastes one of the target's slots testing a concept
+   that already has its own question set, and — worse — it corrupts pipeline 2, where a
+   wrong answer on X is taken to mean "the gap may lie in X's prerequisites" and is the
+   signal `diagnoser.py` reasons from. Only questions for concepts that actually have
+   neighbours are scored; a concept sent nothing but its own summary has nothing to drift
+   onto, and including it would pad the rate with guaranteed passes.
+
+   **This check currently fails, and that is the accurate reading, not a miscalibration.**
+   First live run: 0.86, 4 of 28 at-risk questions off-target — a `write_ahead_log`
+   question asking "how many physical disk writes does a single logical write result in",
+   which is its *sibling* write_amplification's question; a `compaction` question that
+   tests segmentation and the dependency rather than what compaction does; two more of the
+   same shape. The judge is discriminating rather than rubber-stamping (0.86, not 1.00).
+
+   **A prompt rule was tried and reverted.** Adding a rule 10 to `_SYSTEM_PROMPT`
+   (prerequisites/siblings are context not subject matter, plus the "could a student answer
+   this without understanding the target?" test, explicitly protecting
+   conceptual_distinction) moved target focus 0.86 → 0.85 — no change within noise, and the
+   *set* of off-target questions turned over almost completely, which says the drift is
+   unstable rather than fixed. It also knocked evidence basis 0.94 → 0.82, below its own
+   threshold. That is the same destabilization this prompt showed when rules 8-9 were added
+   (see the grounding-fidelity history in CLAUDE.md), and the same lesson: a rule competing
+   against a structural pull loses. The prompt is back to the exact text the 0.86 baseline
+   was measured on.
+
+   The structural read: every concept that drifts (`write_ahead_log`, `compaction`,
+   `bloom_filter`, `hash_index`) has a thin summary of its own next to rich neighbour
+   passages, so the most substantive question available to the model is grounded in a
+   neighbour. The fix is more evidence for the target, not more instructions about the
+   neighbours — which is the same conclusion the hand-added-concept problem reaches from
+   the other direction.
+
 score_case() is lru_cache'd so the assertions in test_case3.py share one run (11
-question_generator calls + two judge calls per generated question — one for evidence
-basis, one for answer quality) instead of re-running the real API per assertion.
+question_generator calls + up to three judge calls per generated question — evidence
+basis, answer quality, and target focus where the concept has neighbours) instead of
+re-running the real API per assertion.
 """
 
 from __future__ import annotations
@@ -100,6 +140,11 @@ EVIDENCE_BASIS_THRESHOLD = 0.85
 # Aggregate pass/fail bar for the fraction of expected_answers judged to actually answer
 # their own question.
 ANSWER_QUALITY_THRESHOLD = 0.9
+# Aggregate pass/fail bar for the fraction of questions that actually assess their own
+# concept rather than a neighbour supplied as context. Provisional — set before the first
+# live run of this check, so it is a guess at what good looks like, not a tightening of
+# observed performance.
+TARGET_FOCUS_THRESHOLD = 0.9
 # An expected_answer shorter than this can't state what a correct answer contains in any
 # usable way — it's a label, not a model answer.
 MIN_EXPECTED_ANSWER_CHARS = 40
@@ -252,6 +297,87 @@ def judge_answer_quality(
     return bool(data["answers_question"]), data["reasoning"]
 
 
+_TARGET_FOCUS_SYSTEM_PROMPT = """You are checking whether a quiz question actually assesses the concept it was written for.
+
+You will be given a TARGET CONCEPT (its name and its own description), the NEIGHBOURING CONCEPTS supplied alongside it as context (its prerequisites, the passages linking them, and sibling concepts), a QUESTION written to assess the target, and the question's TYPE.
+
+Neighbouring concepts are legitimate context. A question may mention one, contrast the target against it, or build on it. What it may not do is make a neighbour the actual subject: every neighbouring concept has its own separate question set, so a question whose correct answer is essentially a statement about a neighbour tests nothing about the target and duplicates questions that already exist elsewhere.
+
+Apply this test: could a student answer this question correctly and completely without demonstrating any understanding of the TARGET concept? If yes, the question is off-target.
+
+conceptual_distinction questions are *supposed* to involve a neighbour — the contrast is the point — and are on-target as long as a correct answer must say something about the target itself, not only about the neighbour.
+
+Answer only: does this question assess the target concept?
+
+Return only valid JSON, no preamble, no markdown fences:
+{"on_target": <true or false>, "reasoning": "<one sentence>"}"""
+
+_TARGET_FOCUS_SCHEMA = {
+    "type": "json_schema",
+    "schema": {
+        "type": "object",
+        "properties": {
+            "on_target": {"type": "boolean"},
+            "reasoning": {"type": "string"},
+        },
+        "required": ["on_target", "reasoning"],
+        "additionalProperties": False,
+    },
+}
+
+
+def judge_target_focus(
+    question_text: str,
+    question_type: str,
+    target_name: str,
+    target_text: str,
+    neighbour_text: str,
+) -> tuple[bool, str]:
+    """Ask claude-haiku-4-5 whether `question_text` assesses the target concept rather
+    than one of the neighbours sent as context. Returns (on_target, one-sentence reasoning)."""
+    prompt = (
+        f"TARGET CONCEPT: {target_name}\n{target_text}\n\n"
+        f"NEIGHBOURING CONCEPTS (context only):\n{neighbour_text}\n\n"
+        f"TYPE:\n{question_type}\n\n"
+        f"QUESTION:\n{question_text}"
+    )
+    response = _judge_client().messages.create(
+        model=_EVIDENCE_BASIS_JUDGE_MODEL,
+        max_tokens=256,
+        temperature=0,
+        system=_TARGET_FOCUS_SYSTEM_PROMPT,
+        messages=[{"role": "user", "content": prompt}],
+        output_config={"format": _TARGET_FOCUS_SCHEMA},
+    )
+    text = next(block.text for block in response.content if block.type == "text")
+    data = json.loads(text)
+    return bool(data["on_target"]), data["reasoning"]
+
+
+def _target_focus_context(passages: list[SourcePassage]) -> tuple[str, str]:
+    """Split a concept's passages into (its own text, everything else) for the judge.
+
+    The other checks flatten every passage into one blob, which is fine when the question
+    is "is this answerable from the evidence". Here the whole question is *which* passage
+    the question is about, so the roles have to survive into the prompt.
+    """
+    target = "\n".join(p["text"] for p in passages if p["role"] == "target_concept")
+    neighbours = "\n".join(
+        f"[{p['role']}: {p['concept_name']}] {p['text']}"
+        for p in passages
+        if p["role"] != "target_concept"
+    )
+    return target, neighbours
+
+
+@dataclass(frozen=True)
+class TargetFocusJudgment:
+    concept_id: str
+    question: RawQuestion
+    on_target: bool
+    reasoning: str
+
+
 @dataclass(frozen=True)
 class AnswerQualityJudgment:
     concept_id: str
@@ -277,6 +403,7 @@ class CaseResult:
     passages_by_concept: dict[str, list[SourcePassage]]
     evidence_basis_judgments: list[EvidenceBasisJudgment]
     answer_quality_judgments: list[AnswerQualityJudgment]
+    target_focus_judgments: list[TargetFocusJudgment]
 
     @property
     def missed_types(self) -> list[tuple[str, str]]:
@@ -413,6 +540,29 @@ class CaseResult:
         )
         return f"{header}\nexpected_answers that don't correctly answer their own question:\n{lines}"
 
+    @property
+    def off_target_questions(self) -> list[TargetFocusJudgment]:
+        return [j for j in self.target_focus_judgments if not j.on_target]
+
+    @property
+    def target_focus_rate(self) -> float:
+        if not self.target_focus_judgments:
+            return 1.0
+        on_target = sum(1 for j in self.target_focus_judgments if j.on_target)
+        return on_target / len(self.target_focus_judgments)
+
+    def target_focus_message(self) -> str:
+        header = f"target-focus rate {self.target_focus_rate:.2f} < {TARGET_FOCUS_THRESHOLD}"
+        lines = "\n".join(
+            f"  - {j.concept_id} [{j.question['type']}] ({j.reasoning})\n"
+            f"    question: {j.question['question']!r}"
+            for j in self.off_target_questions
+        )
+        return (
+            f"{header}\nquestions that assess a neighbouring concept rather than their "
+            f"own:\n{lines}"
+        )
+
     def missed_types_message(self) -> str:
         lines = ", ".join(f"{cid} ({t})" for cid, t in self.missed_types)
         total = sum(len(types) for types in self.case.golden_types.values())
@@ -475,6 +625,30 @@ def score_case() -> CaseResult:
         for q in questions
     ]
 
+    target_focus_judgments: list[TargetFocusJudgment] = []
+    for concept_id, questions in raw_by_concept.items():
+        target_text, neighbour_text = _target_focus_context(passages_by_concept[concept_id])
+        if not neighbour_text:
+            # A concept with no prerequisites and no siblings was sent only its own
+            # summary, so there is nothing for a question to drift onto. Scoring those
+            # would pad the rate with guaranteed passes and hide movement in the
+            # population this check actually exists to watch.
+            continue
+        for q in questions:
+            target_focus_judgments.append(
+                TargetFocusJudgment(
+                    concept_id,
+                    q,
+                    *judge_target_focus(
+                        q["question"],
+                        q["type"],
+                        by_id[concept_id].name,
+                        target_text,
+                        neighbour_text,
+                    ),
+                )
+            )
+
     return CaseResult(
         case=CASE_3_QUESTIONS,
         graph=graph,
@@ -483,4 +657,5 @@ def score_case() -> CaseResult:
         passages_by_concept=passages_by_concept,
         evidence_basis_judgments=evidence_basis_judgments,
         answer_quality_judgments=answer_quality_judgments,
+        target_focus_judgments=target_focus_judgments,
     )
