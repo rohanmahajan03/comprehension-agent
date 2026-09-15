@@ -11,10 +11,29 @@ export interface Concept {
   id: string
   name: string
   summary: string
+  // Verbatim chapter passages about this concept itself, beyond its summary. The
+  // counterpart to `evidence`, which only ever justifies an edge. Empty on every concept
+  // the extractor produced; filled during review from POST .../evidence proposals.
+  source_quotes: string[]
   depends_on: string[]
   // Maps each id in depends_on to the source-text quote justifying that prerequisite
   evidence: Record<string, string>
   questions: Question[]
+}
+
+// Response of POST /api/graph/{doc_id}/concepts/{concept_id}/evidence — what a targeted
+// re-scan of the chapter turned up for one concept. A proposal: nothing is stored until
+// the reviewer accepts it with a PATCH. `found: false` is an ordinary outcome, not an
+// error — the chapter may assume a concept rather than teach it.
+export interface EvidenceProposal {
+  found: boolean
+  // A chapter-grounded summary offered as a replacement; empty when found is false.
+  summary: string
+  // Verbatim chapter passages, each already checked against the source text.
+  quotes: string[]
+  // How many returned quotes were discarded as not verbatim. Lets the UI tell "the chapter
+  // doesn't cover this" apart from "the model paraphrased everything it returned".
+  dropped: number
 }
 
 export interface DependencyGraph {

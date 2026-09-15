@@ -355,3 +355,101 @@ button:disabled {
   background: #fff0cc;
   color: #7a5a00;
 }
+
+/* Chapter-evidence proposals on the review screen. Sits inside .concept-main's flex
+   column, so spacing comes from its gap rather than from margins here. */
+.evidence-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding: 0.6rem 0.75rem;
+  border-radius: 6px;
+  font-size: 0.85rem;
+  border: 1px solid transparent;
+}
+
+.evidence-panel strong {
+  font-size: 0.85rem;
+}
+
+.evidence-panel small {
+  font-size: 0.78rem;
+  opacity: 0.85;
+}
+
+.evidence-quiet {
+  color: #555;
+  background: #eeeef4;
+}
+
+/* Deliberately not .error red: the chapter having nothing to say about a concept is an
+   expected answer — the reviewer may be adding an idea the chapter assumes — so this
+   informs rather than alarms. Shares the 'diagnosing' badge's amber for "needs a look". */
+.evidence-empty {
+  background: #fff8e6;
+  border-color: #f0dfae;
+  color: #6b5200;
+}
+
+.evidence-found {
+  background: #eef7f0;
+  border-color: #c5e2cd;
+  color: #1c4f2c;
+}
+
+.evidence-quotes {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.evidence-quotes li {
+  margin: 0;
+}
+
+.evidence-quotes label,
+.evidence-summary {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.45rem;
+  cursor: pointer;
+}
+
+.evidence-quotes input[type='checkbox'],
+.evidence-summary input[type='checkbox'] {
+  margin-top: 0.2rem;
+  flex-shrink: 0;
+}
+
+.evidence-quotes q {
+  font-style: italic;
+}
+
+.evidence-actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.evidence-actions button {
+  font-size: 0.8rem;
+  padding: 0.25rem 0.7rem;
+}
+
+/* Collapsed by default: stored quotes are reassurance that a concept is well grounded,
+   not something to read on every row. */
+.evidence-stored {
+  font-size: 0.85rem;
+  color: #555;
+}
+
+.evidence-stored summary {
+  cursor: pointer;
+}
+
+.evidence-stored .evidence-quotes {
+  padding: 0.35rem 0 0 1rem;
+}

@@ -233,6 +233,14 @@ def source_passages(
                 }
             )
 
+    # Each chapter quote is its own passage rather than being folded into the summary
+    # above, so the model can cite them individually and `grounding` stays the verbatim
+    # join it already is. This is the one lever on the imbalance that makes a thin concept
+    # borrow its neighbours' questions (question_geval's check 6): a concept with three
+    # good quotes arrives with four passages of its own instead of one.
+    for quote in concept.source_quotes:
+        add("target_concept", concept.name, quote)
+
     for dep_id in concept.depends_on:
         if dep_id not in by_id:
             continue

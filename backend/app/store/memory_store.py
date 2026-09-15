@@ -254,6 +254,7 @@ class InMemoryStore(Store):
                     id=c.id,
                     name=c.name,
                     summary=c.summary,
+                    source_quotes=c.source_quotes,
                     depends_on=c.depends_on,
                     evidence=c.evidence,
                     questions=self._questions.get(c.id, []),

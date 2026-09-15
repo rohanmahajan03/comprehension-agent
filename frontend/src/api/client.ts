@@ -4,6 +4,7 @@ import type {
   Concept,
   DependencyGraph,
   DocumentSummary,
+  EvidenceProposal,
   Question,
   StudySessionDetail,
   StudySessionSummary,
@@ -100,15 +101,33 @@ export function addConcept(
   })
 }
 
+/**
+ * Omitted fields are left alone; `source_quotes` replaces the whole list, which is how
+ * accepting only part of an evidence proposal is expressed. Every quote sent must appear
+ * verbatim in the chapter or the request is rejected with 422 — the field's contract is
+ * that it holds source text, so it's checked at the write rather than trusted.
+ */
 export function editConcept(
   docId: string,
   conceptId: string,
-  changes: { name?: string; summary?: string }
+  changes: { name?: string; summary?: string; source_quotes?: string[] }
 ): Promise<Concept> {
   return request(conceptPath(docId, conceptId), {
     method: 'PATCH',
     body: JSON.stringify(changes),
   })
+}
+
+/**
+ * Re-scan the chapter for passages explaining one concept (one LLM call, so it is slow
+ * relative to every other call on this page).
+ *
+ * Proposes only — nothing is written until the reviewer accepts it via editConcept. A
+ * `found: false` result is a real answer, not a failure: the chapter may assume the concept
+ * rather than teach it, which is a legitimate reason to have added it by hand.
+ */
+export function findEvidence(docId: string, conceptId: string): Promise<EvidenceProposal> {
+  return request(`${conceptPath(docId, conceptId)}/evidence`, { method: 'POST' })
 }
 
 export function deleteConcept(docId: string, conceptId: string): Promise<void> {

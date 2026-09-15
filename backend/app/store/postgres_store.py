@@ -49,6 +49,7 @@ def _to_concept(row: ConceptRow) -> Concept:
         id=row.id,
         name=row.name,
         summary=row.summary,
+        source_quotes=list(row.source_quotes),
         depends_on=list(row.depends_on),
         evidence=dict(row.evidence),
         questions=[_to_question(q) for q in row.questions],
@@ -154,6 +155,7 @@ class PostgresStore(Store):
                     doc_id=graph.doc_id,
                     name=concept.name,
                     summary=concept.summary,
+                    source_quotes=concept.source_quotes,
                     depends_on=concept.depends_on,
                     evidence=concept.evidence,
                 )
@@ -163,6 +165,7 @@ class PostgresStore(Store):
                         "doc_id": stmt.excluded.doc_id,
                         "name": stmt.excluded.name,
                         "summary": stmt.excluded.summary,
+                        "source_quotes": stmt.excluded.source_quotes,
                         "depends_on": stmt.excluded.depends_on,
                         "evidence": stmt.excluded.evidence,
                     },

@@ -303,6 +303,35 @@ class TestDocumentStatus:
         assert store.get_document_status("d") is None
 
 
+class TestGraphRoundTrip:
+    def test_source_quotes_survive_a_save_and_load(self) -> None:
+        """Parity with the PostgresStore JSONB assertion: `source_quotes` is verbatim
+        chapter text, so a backend that altered one by a character would silently break
+        `text_match.is_verbatim()` downstream."""
+        store = InMemoryStore()
+        store.save_document("d", "text")
+        store.save_graph(
+            DependencyGraph(
+                doc_id="d",
+                concepts=[
+                    Concept(
+                        id="d:a",
+                        name="A",
+                        summary="s",
+                        source_quotes=["A is built — as the chapter puts it — on B."],
+                    ),
+                    Concept(id="d:b", name="B", summary="s"),
+                ],
+            )
+        )
+
+        loaded = store.get_graph("d")
+        by_id = {c.id: c for c in loaded.concepts}
+
+        assert by_id["d:a"].source_quotes == ["A is built — as the chapter puts it — on B."]
+        assert by_id["d:b"].source_quotes == []
+
+
 class TestDeleteConcept:
     """Graph editing's one mutation `save_graph` can't express: it only ever upserts the
     concepts it is handed and never deletes the ones missing from that list."""

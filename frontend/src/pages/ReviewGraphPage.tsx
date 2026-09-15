@@ -6,10 +6,11 @@ import {
   deletePrereq,
   editConcept,
   finalizeGraph,
+  findEvidence,
   getGraph,
 } from '../api/client'
 import { DependencyGraphViz } from '../components/DependencyGraphViz'
-import type { Concept, DependencyGraph } from '../types'
+import type { Concept, DependencyGraph, EvidenceProposal } from '../types'
 
 interface Props {
   docId: string
@@ -17,6 +18,20 @@ interface Props {
 }
 
 const SLUG_PATTERN = /^[a-z0-9_]+$/
+
+/**
+ * What a chapter re-scan for one concept is currently showing.
+ *
+ * Kept in component state rather than derived from the concept, because "we looked and the
+ * chapter has nothing" and "nobody has looked yet" are different things a reviewer needs
+ * told apart, and only one of them is recorded server-side (an empty `source_quotes` means
+ * both). It is deliberately transient: it belongs to this review sitting, not to the
+ * chapter.
+ */
+type EvidenceState =
+  | { phase: 'scanning' }
+  | { phase: 'error'; message: string }
+  | { phase: 'done'; proposal: EvidenceProposal; keep: boolean[]; useSummary: boolean }
 
 /**
  * The sentence out of a failed request, without the envelope around it.
@@ -60,6 +75,7 @@ export function ReviewGraphPage({ docId, onFinalized }: Props) {
   const [newName, setNewName] = useState('')
   const [newSummary, setNewSummary] = useState('')
   const [finalizing, setFinalizing] = useState(false)
+  const [evidence, setEvidence] = useState<Record<string, EvidenceState>>({})
 
   const refresh = useCallback(() => getGraph(docId).then(setGraph), [docId])
 
@@ -71,14 +87,68 @@ export function ReviewGraphPage({ docId, onFinalized }: Props) {
   // concept also strips it from every dependent's prerequisites server-side, so local
   // patching would mean reimplementing that cascade in the client — the kind of duplicated
   // rule that drifts. One extra request per edit, on a page where edits are deliberate.
-  const run = async (action: () => Promise<unknown>) => {
+  // Reports whether the action went through, so a caller with its own UI to tear down (the
+  // evidence panel) can keep it up when the write was rejected — a 422 on a quote that
+  // isn't in the chapter has to leave the reviewer something to fix.
+  const run = async (action: () => Promise<unknown>): Promise<boolean> => {
     setError(null)
     try {
       await action()
       await refresh()
+      return true
     } catch (err) {
       setError(failureMessage(err))
+      return false
     }
+  }
+
+  const setEvidenceState = (conceptId: string, state: EvidenceState | null) =>
+    setEvidence((prev) => {
+      const next = { ...prev }
+      if (state) next[conceptId] = state
+      else delete next[conceptId]
+      return next
+    })
+
+  /**
+   * Ask the chapter what it says about one concept.
+   *
+   * Runs outside `run()` on purpose: it writes nothing, so there is nothing to refresh, and
+   * a failure here is about one row rather than about the page. It also has to be able to
+   * fail visibly-but-harmlessly — the concept is already saved by the time this runs, which
+   * is exactly why the scan is a separate request from the add.
+   */
+  const scanForEvidence = async (conceptId: string) => {
+    setEvidenceState(conceptId, { phase: 'scanning' })
+    try {
+      const proposal = await findEvidence(docId, conceptId)
+      setEvidenceState(conceptId, {
+        phase: 'done',
+        proposal,
+        // Everything ticked: the reviewer's job here is to reject what doesn't belong, not
+        // to re-approve passage by passage what the chapter plainly says.
+        keep: proposal.quotes.map(() => true),
+        // The summary is the one thing they already wrote themselves, so replacing it is
+        // opt-in rather than opt-out.
+        useSummary: false,
+      })
+    } catch (err) {
+      setEvidenceState(conceptId, { phase: 'error', message: failureMessage(err) })
+    }
+  }
+
+  const acceptEvidence = async (conceptId: string, state: EvidenceState) => {
+    if (state.phase !== 'done') return
+    const quotes = state.proposal.quotes.filter((_, i) => state.keep[i])
+    const saved = await run(() =>
+      editConcept(docId, conceptId, {
+        source_quotes: quotes,
+        ...(state.useSummary && state.proposal.summary
+          ? { summary: state.proposal.summary }
+          : {}),
+      })
+    )
+    if (saved) setEvidenceState(conceptId, null)
   }
 
   const startEditing = (concept: Concept) => {
@@ -103,6 +173,118 @@ export function ReviewGraphPage({ docId, onFinalized }: Props) {
   if (!graph) return error ? <p className="error">{error}</p> : <p>Loading graph…</p>
 
   const nameOf = (id: string) => graph.concepts.find((c) => c.id === id)?.name ?? id
+
+  const renderEvidence = (concept: Concept) => {
+    const state = evidence[concept.id]
+    if (!state) return null
+
+    if (state.phase === 'scanning') {
+      return <p className="evidence-panel evidence-quiet">Searching the chapter…</p>
+    }
+
+    if (state.phase === 'error') {
+      return (
+        <div className="evidence-panel evidence-empty">
+          <span>Couldn’t search the chapter: {state.message}</span>
+          <div className="evidence-actions">
+            <button className="session-cancel" onClick={() => setEvidenceState(concept.id, null)}>
+              Dismiss
+            </button>
+            <button onClick={() => scanForEvidence(concept.id)}>Try again</button>
+          </div>
+        </div>
+      )
+    }
+
+    const { proposal } = state
+    if (!proposal.found) {
+      return (
+        <div className="evidence-panel evidence-empty">
+          <strong>Could not find evidence for this concept in the chapter.</strong>
+          <span>
+            Questions for it will be written from your summary alone, which supports a
+            definition question and not much more. If the chapter does cover this idea, try
+            rewording the name or summary to match the words it uses. If it assumes the idea
+            rather than teaching it, leaving this as-is is the right answer.
+          </span>
+          {proposal.dropped > 0 && (
+            <small>
+              {proposal.dropped} passage{proposal.dropped === 1 ? '' : 's'} came back that
+              {proposal.dropped === 1 ? " wasn't" : " weren't"} actually in the chapter, and
+              {proposal.dropped === 1 ? ' was' : ' were'} discarded rather than stored as a
+              source quote.
+            </small>
+          )}
+          <div className="evidence-actions">
+            <button className="session-cancel" onClick={() => setEvidenceState(concept.id, null)}>
+              Dismiss
+            </button>
+            <button onClick={() => scanForEvidence(concept.id)}>Search again</button>
+          </div>
+        </div>
+      )
+    }
+
+    const keptCount = state.keep.filter(Boolean).length
+    return (
+      <div className="evidence-panel evidence-found">
+        <strong>
+          Found {proposal.quotes.length} passage{proposal.quotes.length === 1 ? '' : 's'} in
+          the chapter. Keep the ones that are really about this concept.
+        </strong>
+        <ul className="evidence-quotes">
+          {proposal.quotes.map((quote, i) => (
+            <li key={quote}>
+              <label>
+                <input
+                  type="checkbox"
+                  checked={state.keep[i]}
+                  onChange={(e) =>
+                    setEvidenceState(concept.id, {
+                      ...state,
+                      keep: state.keep.map((k, j) => (j === i ? e.target.checked : k)),
+                    })
+                  }
+                />
+                <q>{quote}</q>
+              </label>
+            </li>
+          ))}
+        </ul>
+        {proposal.summary && (
+          <label className="evidence-summary">
+            <input
+              type="checkbox"
+              checked={state.useSummary}
+              onChange={(e) =>
+                setEvidenceState(concept.id, { ...state, useSummary: e.target.checked })
+              }
+            />
+            <span>
+              Also replace the summary with: <em>{proposal.summary}</em>
+            </span>
+          </label>
+        )}
+        {proposal.dropped > 0 && (
+          <small>
+            {proposal.dropped} further passage{proposal.dropped === 1 ? '' : 's'} came back
+            that {proposal.dropped === 1 ? "wasn't" : "weren't"} actually in the chapter, and
+            {proposal.dropped === 1 ? ' was' : ' were'} discarded.
+          </small>
+        )}
+        <div className="evidence-actions">
+          <button className="session-cancel" onClick={() => setEvidenceState(concept.id, null)}>
+            Discard
+          </button>
+          <button onClick={() => acceptEvidence(concept.id, state)}>
+            {keptCount === 0
+              ? 'Keep none'
+              : `Save ${keptCount} passage${keptCount === 1 ? '' : 's'}`}
+          </button>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div>
@@ -185,8 +367,9 @@ export function ReviewGraphPage({ docId, onFinalized }: Props) {
                         onChange={(e) => setDraftSummary(e.target.value)}
                       />
                       <small>
-                        The summary is the evidence every question about this concept gets
-                        written from.
+                        The summary is this concept's own evidence, alongside any chapter
+                        passages kept for it — together they are what every question about
+                        it gets written from.
                       </small>
                     </div>
                     <div className="concept-actions">
@@ -222,6 +405,22 @@ export function ReviewGraphPage({ docId, onFinalized }: Props) {
                   <div className="concept-main">
                     <strong>{concept.name}</strong>
                     <span>{concept.summary}</span>
+                    {concept.source_quotes.length > 0 && (
+                      <details className="evidence-stored">
+                        <summary>
+                          {concept.source_quotes.length} chapter passage
+                          {concept.source_quotes.length === 1 ? '' : 's'} kept as evidence
+                        </summary>
+                        <ul className="evidence-quotes">
+                          {concept.source_quotes.map((quote) => (
+                            <li key={quote}>
+                              <q>{quote}</q>
+                            </li>
+                          ))}
+                        </ul>
+                      </details>
+                    )}
+                    {renderEvidence(concept)}
                     <div className="concept-prereqs">
                       <span className="concept-prereqs-label">Depends on:</span>
                       {concept.depends_on.length === 0 && <em>nothing</em>}
@@ -259,6 +458,15 @@ export function ReviewGraphPage({ docId, onFinalized }: Props) {
                     </div>
                   </div>
                   <div className="concept-actions">
+                    {/* Re-runnable on demand, not just after an add: editing a concept's
+                        name or summary changes what the scan is looking for. */}
+                    <button
+                      className="session-cancel"
+                      disabled={evidence[concept.id]?.phase === 'scanning'}
+                      onClick={() => scanForEvidence(concept.id)}
+                    >
+                      Find evidence
+                    </button>
                     <button className="session-cancel" onClick={() => startEditing(concept)}>
                       Edit
                     </button>
@@ -307,7 +515,7 @@ export function ReviewGraphPage({ docId, onFinalized }: Props) {
             }
             onClick={() =>
               run(async () => {
-                await addConcept(docId, {
+                const created = await addConcept(docId, {
                   slug: newSlug,
                   name: newName.trim(),
                   summary: newSummary.trim(),
@@ -315,13 +523,21 @@ export function ReviewGraphPage({ docId, onFinalized }: Props) {
                 setNewSlug('')
                 setNewName('')
                 setNewSummary('')
+                // Fired, not awaited: the concept is saved, so the slow part shouldn't
+                // hold up the form clearing, and a scan that fails or finds nothing must
+                // not read as a failed add. Automatic so there's no way to end up with a
+                // thin concept by forgetting a second click.
+                void scanForEvidence(created.id)
               })
             }
           >
             Add concept
           </button>
           <br />
-          <small>Slug: lowercase letters, digits and underscores.</small>
+          <small>
+            Slug: lowercase letters, digits and underscores. The chapter is searched for
+            supporting passages automatically once the concept is added.
+          </small>
         </p>
       </div>
     </div>

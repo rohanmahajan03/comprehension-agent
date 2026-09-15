@@ -18,7 +18,6 @@ extraction + one alignment call instead of re-running the real API per assertion
 from __future__ import annotations
 
 import json
-import re
 from dataclasses import dataclass
 from functools import lru_cache
 
@@ -27,6 +26,7 @@ import anthropic
 from app.config import get_settings
 from app.services import graph_builder
 from app.services.graph_builder import RawConcept, RawGraph
+from app.services.text_match import is_verbatim
 
 from .golden import CASES_BY_NAME, GoldenCase
 
@@ -93,10 +93,6 @@ _ALIGNMENT_SCHEMA = {
 @lru_cache
 def _align_client() -> anthropic.Anthropic:
     return anthropic.Anthropic(api_key=get_settings().llm_api_key)
-
-
-def _normalize_ws(s: str) -> str:
-    return re.sub(r"\s+", " ", s).strip()
 
 
 def _build_alignment_prompt(case: GoldenCase, extracted: list[RawConcept]) -> str:
@@ -196,12 +192,14 @@ class CaseResult:
 
     @property
     def evidence_violations(self) -> list[str]:
-        normalized_source = _normalize_ws(self.case.source_text)
-        violations = []
-        for edge in self.raw["edges"]:
-            if _normalize_ws(edge["evidence"]) not in normalized_source:
-                violations.append(f"{edge['from']} -> {edge['to']}: {edge['evidence']!r}")
-        return violations
+        # The rule itself lives in app/services/text_match.py, shared with evidence_finder
+        # and the graph-editing endpoints, so the suite grades the extractor against the
+        # same definition of "verbatim" production enforces rather than its own copy.
+        return [
+            f"{edge['from']} -> {edge['to']}: {edge['evidence']!r}"
+            for edge in self.raw["edges"]
+            if not is_verbatim(edge["evidence"], self.case.source_text)
+        ]
 
     def missed_concepts_message(self) -> str:
         names = ", ".join(f"{c.id} ({c.label})" for c in self.missed_concepts)

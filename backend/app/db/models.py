@@ -42,6 +42,10 @@ class ConceptRow(Base):
     doc_id: Mapped[str] = mapped_column(ForeignKey("documents.id", ondelete="CASCADE"))
     name: Mapped[str]
     summary: Mapped[str]
+    # list[str] of verbatim chapter passages about this concept itself — the counterpart to
+    # `evidence`, which only ever justifies an edge. Same JSONB reasoning as the two below:
+    # nothing queries a quote independent of a full-graph load.
+    source_quotes: Mapped[list[str]] = mapped_column(JSONB, server_default="[]", default=list)
     # list[str] of concept ids. Never queried independent of a full-graph load — see design
     # doc §2 — so this stays JSONB rather than a normalized edge table.
     depends_on: Mapped[list[str]] = mapped_column(JSONB, default=list)

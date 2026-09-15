@@ -1,5 +1,6 @@
 """Shared test fixtures."""
 
+import re
 from itertools import count
 
 import pytest
@@ -10,9 +11,16 @@ from app.models import (
     DependencyGraph,
     DiagnosisResult,
     EvaluationResult,
+    EvidenceProposal,
     Question,
 )
-from app.services import diagnoser, evaluator, graph_builder, question_generator
+from app.services import (
+    diagnoser,
+    evaluator,
+    evidence_finder,
+    graph_builder,
+    question_generator,
+)
 
 # Fixed sample graph shape used by the graph_builder stub: (slug, name, summary, depends_on slugs)
 _SAMPLE_CONCEPTS: list[tuple[str, str, str, list[str]]] = [
@@ -146,3 +154,48 @@ def stub_diagnoser(monkeypatch: pytest.MonkeyPatch) -> None:
         )
 
     monkeypatch.setattr(diagnoser, "diagnose", _fake_diagnose)
+
+
+# One sentence of chapter text, punctuation included, as a verbatim slice of the original —
+# `strip()` only trims the ends, so what comes back is still a contiguous run of the source
+# and passes the real `text_match.verbatim_only()` the stubs below hand it to.
+_SENTENCE_RE = re.compile(r"[^.!?]+[.!?]?")
+
+
+def _sentences(text: str) -> list[str]:
+    return [m.group().strip() for m in _SENTENCE_RE.finditer(text) if m.group().strip()]
+
+
+@pytest.fixture(autouse=True)
+def stub_evidence_finder(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Replace the chapter re-scan with a deterministic keyword match so tests never hit
+    the API: a sentence counts as evidence for a concept when it mentions that concept by
+    name, and as evidence for an edge when it mentions both concepts.
+
+    Crude on purpose, but it exercises the real branch structure rather than hard-coding an
+    outcome — the `found` / not-found split follows from the chapter text a test uploads.
+    conftest's stub chapter ("A sample chapter about calculus.") names no concept, so the
+    default everywhere is `found: False`, which is also the behavior that predates this
+    feature.
+    """
+
+    def _fake_find_evidence(chapter_text: str, concept: Concept) -> EvidenceProposal:
+        hits = [s for s in _sentences(chapter_text) if concept.name.lower() in s.lower()][:2]
+        if not hits:
+            return EvidenceProposal(found=False)
+        return EvidenceProposal(
+            found=True,
+            summary=f"[test stub] Chapter-grounded summary of {concept.name}.",
+            quotes=hits,
+        )
+
+    def _fake_find_edge_evidence(
+        chapter_text: str, concept: Concept, prereq: Concept
+    ) -> str | None:
+        names = (concept.name.lower(), prereq.name.lower())
+        return next(
+            (s for s in _sentences(chapter_text) if all(n in s.lower() for n in names)), None
+        )
+
+    monkeypatch.setattr(evidence_finder, "find_evidence", _fake_find_evidence)
+    monkeypatch.setattr(evidence_finder, "find_edge_evidence", _fake_find_edge_evidence)

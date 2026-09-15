@@ -26,6 +26,10 @@ class Concept(BaseModel):
     id: str
     name: str
     summary: str
+    source_quotes: list[str] = Field(
+        default_factory=list,
+        description="Verbatim chapter passages explaining this concept, beyond its summary",
+    )
     depends_on: list[str] = Field(default_factory=list, description="IDs of prerequisite concepts")
     evidence: dict[str, str] = Field(
         default_factory=dict,
@@ -39,6 +43,34 @@ class Concept(BaseModel):
 class DependencyGraph(BaseModel):
     doc_id: str
     concepts: list[Concept] = Field(default_factory=list)
+
+
+class EvidenceProposal(BaseModel):
+    """What a targeted re-scan of the chapter turned up for one concept.
+
+    A *proposal*: nothing here is written until the reviewer accepts it through
+    `PATCH /api/graph/{doc_id}/concepts/{concept_id}`. Silently overwriting the summary
+    someone just typed with model output would invert the human-in-the-loop feature this
+    serves (docs/specs/2026-09-13-concept-evidence-generation.md §6).
+
+    `found: False` is an ordinary, expected outcome, not an error: a reviewer may be adding
+    a concept the chapter assumes rather than teaches, and manufacturing quotes to fill the
+    schema is the failure mode this flag exists to prevent.
+    """
+
+    found: bool
+    summary: str = Field(
+        default="",
+        description="A chapter-grounded summary offered as a replacement; empty when found is False",
+    )
+    quotes: list[str] = Field(
+        default_factory=list,
+        description="Verbatim chapter passages, each already checked against the source text",
+    )
+    dropped: int = Field(
+        default=0,
+        description="How many returned quotes were discarded as not verbatim in the chapter",
+    )
 
 
 class DocumentStatus(str, Enum):

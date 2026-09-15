@@ -118,9 +118,13 @@ def test_document_round_trip(store: PostgresStore) -> None:
 
 
 def test_graph_round_trip_preserves_jsonb_fields_verbatim(store: PostgresStore) -> None:
-    """depends_on/evidence are JSONB (design doc §2) — confirm they survive a round trip
-    without transformation, including a character (em-dash) that has broken other parts of
-    this project when re-serialized carelessly."""
+    """depends_on/evidence/source_quotes are JSONB (design doc §2) — confirm they survive a
+    round trip without transformation, including a character (em-dash) that has broken other
+    parts of this project when re-serialized carelessly.
+
+    `source_quotes` matters most of the three here: its entire contract is that its strings
+    are verbatim chapter text, so a storage layer that altered one by a character would
+    break `text_match.is_verbatim()` downstream without any visible error."""
     store.save_document("doc1", "text")
     graph = DependencyGraph(
         doc_id="doc1",
@@ -129,6 +133,7 @@ def test_graph_round_trip_preserves_jsonb_fields_verbatim(store: PostgresStore) 
                 id="doc1:a",
                 name="A",
                 summary="A summary — em dash intact.",
+                source_quotes=["A is built — as the chapter puts it — on B.", "Second quote."],
                 depends_on=["doc1:b"],
                 evidence={"doc1:b": "B justifies A."},
             ),
@@ -145,7 +150,11 @@ def test_graph_round_trip_preserves_jsonb_fields_verbatim(store: PostgresStore) 
     assert a.depends_on == ["doc1:b"]
     assert a.evidence == {"doc1:b": "B justifies A."}
     assert a.summary == "A summary — em dash intact."
+    assert a.source_quotes == ["A is built — as the chapter puts it — on B.", "Second quote."]
     assert a.questions == []  # none saved yet
+
+    b = next(c for c in loaded.concepts if c.id == "doc1:b")
+    assert b.source_quotes == [], "the column's server_default, not a NULL that breaks list()"
 
 
 def test_get_graph_returns_none_for_unknown_doc(store: PostgresStore) -> None:
