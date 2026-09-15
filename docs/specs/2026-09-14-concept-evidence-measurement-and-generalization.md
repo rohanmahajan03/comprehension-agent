@@ -1,6 +1,14 @@
 # Concept evidence: measurement, then generalization — design
 
-**Status:** proposed (nothing built)
+**Status: DEFERRED**, except stage 1b, which was extracted into its own document and
+supersedes §4's sketch of it: `docs/specs/2026-09-15-evidence-finder-test-strategy.md`.
+
+Stage 0 was built and run inconclusively before being paused —
+`docs/specs/2026-09-15-stage0-probe-progress.md` has the probe, the data, and the resume point.
+Stages 1a and 2 are untouched and stay deferred behind it. §6 of this document (the
+judge-contamination risk) and §8's sequencing are still the right analysis; only the priority
+changed.
+
 **Picks up from:** `docs/specs/2026-09-13-concept-evidence-generation.md`, implemented
 2026-09-14, which added `Concept.source_quotes` and filled it for **hand-added** concepts via
 `evidence_finder.py`.
@@ -11,8 +19,12 @@ extracted concepts (its §9). Each stage gates the next, and the whole point of 
 is that **stage 2 is the expensive, risky one, and stages 0 and 1 exist to decide whether it is
 worth doing at all.**
 
-> **Outstanding, and the one item blocked on nothing: `evidence_finder` has no billed
-> regression suite** (§4, stage 1b). Every other service that makes real LLM calls has one.
+> **Extracted, and now the live piece of work: `evidence_finder` has no billed regression
+> suite** — §4 stage 1b below is superseded by
+> `docs/specs/2026-09-15-evidence-finder-test-strategy.md`, which takes it further than this
+> sketch does (deterministic span checks in place of judge calls, a ranked failure-mode
+> analysis, and a free tier that closes a gap this document missed: the real `find_evidence`
+> body is executed by no test at all). Every other service that makes real LLM calls has one.
 > It is covered today by free tests over a stub plus a single live spot-check of three calls —
 > enough to know the thing works once, not enough to know when it stops. Unlike the rest of
 > this document it does not depend on any probe result, so it can be picked up independently
@@ -61,7 +73,8 @@ so none of them can tell you the prompt still works.
 | `tests/test_graph_review.py` (12 of 27) | Endpoint wiring against `stub_evidence_finder`: proposal not auto-applied, partial acceptance, omitted-field, the non-verbatim 422, and all three find-nothing paths |
 | `tests/test_{memory,postgres}_store.py` | Round-trip of the new JSONB column, em-dash intact |
 | `tests/conftest.py` | `stub_evidence_finder` — deterministic, free, and **the reason a billed suite is now necessary rather than optional** |
-| **`tests/evidence_geval/`** | **Does not exist.** §4 stage 1b. |
+| **`tests/evidence_geval/`** | **Does not exist.** Now specced in `2026-09-15-evidence-finder-test-strategy.md`. |
+| `find_evidence()`'s own body | **Never executed by any test** — every reference stubs or patches it. Free tier of that doc. |
 
 The last two rows are connected. Adding an autouse stub means the real prompt is now *never*
 exercised by anything that runs routinely — a regression in `_SYSTEM_PROMPT` would sail through
