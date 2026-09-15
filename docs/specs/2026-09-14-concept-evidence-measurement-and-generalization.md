@@ -11,6 +11,13 @@ extracted concepts (its §9). Each stage gates the next, and the whole point of 
 is that **stage 2 is the expensive, risky one, and stages 0 and 1 exist to decide whether it is
 worth doing at all.**
 
+> **Outstanding, and the one item blocked on nothing: `evidence_finder` has no billed
+> regression suite** (§4, stage 1b). Every other service that makes real LLM calls has one.
+> It is covered today by free tests over a stub plus a single live spot-check of three calls —
+> enough to know the thing works once, not enough to know when it stops. Unlike the rest of
+> this document it does not depend on any probe result, so it can be picked up independently
+> and at any time. §4 is written to be executed without re-deriving anything.
+
 ## 1. Why this is a separate document
 
 The evidence pass shipped with a gap its own §8 names: *"nobody has yet shown that a concept
@@ -41,6 +48,25 @@ The previous document answered neither and said so. This one sequences them.
 | `source_quotes` improve any generator metric | **Unknown** |
 
 The last row is the one everything else waits on.
+
+### Test coverage, as it stands
+
+What exists is real but stops at the stub boundary — every free test below fakes the LLM call,
+so none of them can tell you the prompt still works.
+
+| | |
+|---|---|
+| `tests/test_text_match.py` (13) | The verbatim rule via its near-misses: rewrapped line passes; paraphrase, dropped middle clause, em-dash→hyphen, and a stitched quote all fail |
+| `tests/test_question_generator.py` (4) | `source_passages()` assembly, including quotes-become-passages and id contiguity |
+| `tests/test_graph_review.py` (12 of 27) | Endpoint wiring against `stub_evidence_finder`: proposal not auto-applied, partial acceptance, omitted-field, the non-verbatim 422, and all three find-nothing paths |
+| `tests/test_{memory,postgres}_store.py` | Round-trip of the new JSONB column, em-dash intact |
+| `tests/conftest.py` | `stub_evidence_finder` — deterministic, free, and **the reason a billed suite is now necessary rather than optional** |
+| **`tests/evidence_geval/`** | **Does not exist.** §4 stage 1b. |
+
+The last two rows are connected. Adding an autouse stub means the real prompt is now *never*
+exercised by anything that runs routinely — a regression in `_SYSTEM_PROMPT` would sail through
+a fully green `pytest` run. That is the correct trade for free tests, and it is exactly why the
+billed counterpart is the gap worth closing first.
 
 ## 3. Stage 0 — the premise probe (~8 calls, seconds)
 
@@ -125,8 +151,39 @@ really support.
 
 ### 1b. An `evidence_finder` regression suite (`tests/evidence_geval/`)
 
-`evidence_finder` is the only service making real LLM calls with no billed suite. What it
-would grade, in the shape of the existing four:
+**The one item here gated on nothing.** `evidence_finder` is the only service making real LLM
+calls with no billed suite, and that stays true whatever stages 0 and 1a conclude.
+
+#### Layout
+
+Mirror the existing three so there is nothing new to learn:
+
+```
+tests/evidence_geval/
+    __init__.py
+    conftest.py     # skip whole dir if LLM_API_KEY unset; override parent stubs as no-ops
+    golden.py       # positive + negative fixtures, built on graph_geval's CASE_3
+    support.py      # score_case(), lru_cache'd; the judge call; threshold constants
+    test_evidence.py
+    probe.py        # `probe case <name>` and `probe judges`
+```
+
+> **The gotcha that will silently ruin this suite:** `tests/conftest.py` now has an autouse
+> `stub_evidence_finder`, so unless `tests/evidence_geval/conftest.py` **overrides it as a
+> no-op**, every call the suite makes is the stub and the suite passes while measuring nothing.
+> The other three suites each do exactly this for their own service — copy
+> the top of `tests/question_geval/conftest.py`, which has both halves (stub override +
+> `LLM_API_KEY` skip) in its first 30 lines — the rest of that file is the
+> `pytest_terminal_summary` worth copying too. Sanity-check the override on the first run by
+> asserting a quote that could only have come from the real chapter and not from the stub's
+> sentence match.
+
+`score_case()` should be `lru_cache`d so the per-check assertions share one set of calls, as in
+all three existing suites, and `pytest_terminal_summary` should print the metrics on a green
+run too — a rate of exactly 1.00 on an LLM-judged check means the judge has stopped
+discriminating, which is indistinguishable from health without the number.
+
+#### What it grades
 
 - **Verbatim rate**, deterministic, on the `_propose_raw_evidence()` seam rather than on
   `find_evidence()`. Post-filter the rate is 1.00 by construction, which measures nothing; the
@@ -156,11 +213,34 @@ would grade, in the shape of the existing four:
   `log_segment`) and pairs it doesn't (`bloom_filter` / `append_only_log`), same
   precision-over-recall weighting.
 
-Reuse `tests/graph_geval/golden.py`'s `CASE_3_STORAGE_ENGINES` for concept ids and labels, the
-way `question_geval` already does, so a third suite can't disagree with the other two about
-what the case contains. Include a `probe judges` mode from the start and re-run it after any
-judge-prompt edit — `diagnoser_geval`'s docstring records that hazard twice over, and a judge
-that has stopped discriminating is indistinguishable from a healthy pass at exactly 1.00.
+#### Fixtures, thresholds, cost
+
+Reuse `tests/graph_geval/golden.py`'s `CASE_3_STORAGE_ENGINES` for concept ids, labels and
+source text, the way `question_geval` already does, so a third suite can't disagree with the
+other two about what the case contains. The negatives are the only hand-written part, and they
+are listed above.
+
+**Set thresholds loose and named** (`FOUND_RECALL_THRESHOLD`, `EXPLANATORY_THRESHOLD`, …), with
+found-precision and verbatim at zero tolerance. `diagnoser_geval`'s note applies directly:
+with ~11 positive fixtures each worth 9%, a threshold set flush against first-run performance
+turns a regression detector into a flake generator. The per-concept table in the terminal
+summary is the real detector; the threshold catches a collapse.
+
+**Cost is the low one of the four suites.** Roughly 11 positive scans + ~6 negative + a handful
+of edge pairs + one judge call per returned quote — all `claude-haiku-4-5`, no Sonnet
+generation and no Opus judging, so it should land well under `eval_geval`'s $0.35–0.45 and
+`question_geval`'s 224s. Cheap enough to run on any `evidence_finder.py` prompt edit rather
+than saving it up.
+
+**The baseline to beat**, from the one live spot-check that has been run (3 calls, Case 3
+excerpt): `hash_index` → `found: true`, 2 verbatim explanatory passages, 0 dropped; a concept
+the excerpt never teaches → `found: false`; `compaction`/`log_segment` → a verbatim linking
+sentence. A first suite run that does worse than that on the same inputs means something
+regressed between then and now, not that the bar was set too high.
+
+Include a `probe judges` mode from the start and re-run it after any judge-prompt edit —
+`diagnoser_geval`'s docstring records that hazard twice over, and recalibrating a judge until
+the suite goes green is the easiest way to build a test that measures nothing.
 
 ## 5. Stage 2 — extracted concepts get `source_quotes`
 
@@ -271,12 +351,16 @@ the chapter is the supported answer.
 |---|---|---|---|
 | 0 | `probe thicken` on the four drifting concepts | ~8 calls, seconds | **Stop here if drift doesn't drop.** |
 | 1a | `probe ab`, all 11 concepts, all six metrics | ~2 full runs, one time | Effect real at scale, no metric collapses |
-| 1b | `tests/evidence_geval/` | new suite, run on demand | Independent — do it regardless |
+| 1b | `tests/evidence_geval/` | cheapest of the four suites (Haiku only) | **None — unblocked, start any time** |
 | 2 | `evidence_finder` pass wired into ingestion | N Haiku calls per chapter | Stage 0 + 1a both positive |
 | 2′ | Re-measure, update goldens, revisit thresholds | 1 full run | — |
 
-Stage 1b is the only item not gated on anything: it covers a service that is live and untested
-today, and that stays true whatever the probes say.
+**Stage 1b is the only item not gated on anything**, and the one to pick up first if stages 0
+and 1a are waiting on time or appetite: it covers a service that is live and, against the real
+API, untested today. Nothing the probes conclude changes that. It also gets cheaper to build
+now than later — stage 2 would put `evidence_finder` on the ingestion path for *every* chapter,
+at which point a silent prompt regression stops being a review-screen annoyance and starts
+degrading every question set the system writes.
 
 ## 9. Out of scope
 
