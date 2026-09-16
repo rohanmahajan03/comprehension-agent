@@ -49,6 +49,12 @@ _MODEL = "claude-haiku-4-5"
 # A ceiling on how much of the chapter one concept can claim. Four explanatory passages is
 # already more target evidence than any extracted concept has today; past that the model
 # starts padding with passages that merely mention the term, which rule 2 exists to exclude.
+#
+# Asked for in the prompt (rule 6) *and* enforced in code below. Every other invariant in this
+# service is verified rather than requested — quotes by `verbatim_only()`, `found` by
+# recomputation — and a prompt-only cap was the odd one out in a service whose whole design
+# principle is "verify, don't ask". The cap counts *surviving* quotes, applied after the
+# verbatim filter, so a model that pads with paraphrases doesn't crowd out real passages.
 _MAX_QUOTES = 4
 
 _SYSTEM_PROMPT = f"""You are locating source evidence for a single concept inside a textbook chapter.
@@ -181,13 +187,20 @@ def find_evidence(chapter_text: str, concept: Concept) -> EvidenceProposal:
     reviewer seeing "no evidence found" can tell "the chapter doesn't cover this" apart from
     "the model paraphrased everything it returned".
 
+    At most `_MAX_QUOTES` survive, trimmed after verification. Trimming is deliberately not
+    counted in `dropped`, which means only "the model returned text that isn't in the chapter".
+
     One caveat worth knowing: a surviving `summary` was written against the model's whole
     quote list, so if some of those were dropped the summary may rest partly on text that
     isn't in the chapter. That is precisely why nothing here is applied without review.
     """
     raw = _propose_raw_evidence(chapter_text, concept)
-    quotes = verbatim_only(raw["quotes"], chapter_text) if raw["found"] else []
-    dropped = (len(raw["quotes"]) - len(quotes)) if raw["found"] else 0
+    verified = verbatim_only(raw["quotes"], chapter_text) if raw["found"] else []
+    dropped = (len(raw["quotes"]) - len(verified)) if raw["found"] else 0
+    # Truncation is not a discard: `dropped` means "the model returned text that isn't in the
+    # chapter", which is the prompt-health signal a regression suite watches. Quotes trimmed
+    # here were perfectly good, just surplus, and counting them would blur the two.
+    quotes = verified[:_MAX_QUOTES]
 
     if not quotes:
         return EvidenceProposal(found=False, summary="", quotes=[], dropped=dropped)
