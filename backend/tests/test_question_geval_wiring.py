@@ -97,3 +97,53 @@ def test_grounding_check_catches_model_typed_text(fake_clients: None) -> None:
 
     violations = result.grounding_violations
     assert any("not the verbatim join" in v for v in violations), violations
+
+
+# --- the stage 0 premise probe (tests/question_geval/probe.py) ---
+#
+# The probe is a manual tool, so a typo in it surfaces the moment you run it. Its *fixtures*
+# are the part worth guarding for free: THICKENING's quotes are asserted verbatim against the
+# Case 3 source text at import, and that assertion is the thing that silently starts mattering
+# when someone edits graph_golden_set.md. Catching it here costs milliseconds; catching it by
+# running the probe costs a billed run that then measures the effect of invented evidence.
+
+
+def test_probe_fixtures_are_verbatim_and_cover_every_drifting_concept() -> None:
+    """Importing the module runs `_check_fixtures()`; this pins that it actually ran."""
+    from tests.question_geval import probe
+
+    probe._check_fixtures()  # explicit, so the assertion is this test's failure, not an ImportError
+    assert set(probe.DRIFTING) <= set(probe.THICKENING)
+
+
+def test_probe_thickens_only_the_target_concept(fake_clients: None) -> None:
+    """The isolation that makes a null result meaningful: if neighbours were thickened too,
+    an unchanged drift rate would be explained by the imbalance being unchanged rather than by
+    the hypothesis being wrong."""
+    from tests.question_geval import probe
+
+    graph = probe._graph_with_quotes("write_ahead_log")
+    with_quotes = {c.id for c in graph.concepts if c.source_quotes}
+
+    assert with_quotes == {"case3:write_ahead_log"}
+    assert probe._graph_with_quotes(None) and not any(
+        c.source_quotes for c in probe._graph_with_quotes(None).concepts
+    )
+
+
+def test_probe_variant_path_executes(fake_clients: None) -> None:
+    """Drives _run_variant end to end against the fake clients, so a name referenced only
+    inside it fails in 0.03s rather than after the first real generation call."""
+    from tests.question_geval import probe
+
+    slug = "write_ahead_log"
+    baseline = probe._run_variant("baseline", probe._graph_with_quotes(None), slug)
+    thickened = probe._run_variant("thickened", probe._graph_with_quotes(slug), slug)
+
+    assert baseline.questions and thickened.questions
+    assert len(baseline.on_target) == len(baseline.questions) == len(baseline.grounded)
+    # The comparison the probe exists to make has to be non-trivial on the evidence side.
+    assert thickened.target_passages > baseline.target_passages
+    assert thickened.target_chars > baseline.target_chars
+    assert 0.0 <= baseline.focus_rate <= 1.0
+    probe._print_variant(thickened)  # the formatter, including its strict zip
