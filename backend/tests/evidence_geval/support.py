@@ -8,10 +8,11 @@ the right answer is a set of spans in a document this suite already holds, so sp
 verbatim fidelity, found-precision, contiguity and cap adherence are all arithmetic. Only two
 checks here call an LLM, and both are for questions that are genuinely interpretive.
 
-That also makes the suite unusually stable. A judge's opinion of a varying model output varies
-twice over; a substring check over a varying output varies once — which is why this suite was
-worth building before settling the stage 0 non-determinism question
-(docs/specs/2026-09-15-stage0-probe-progress.md, DEFERRED).
+That also makes the suite unusually stable, which matters more here than it looks. These calls
+are not deterministic even at `temperature=0` — the same is on record for `evaluator.py`'s
+verdicts and for `question_generator` corrupting a passage differently on each run. A judge's
+opinion of a varying model output varies twice over; a substring check over a varying output
+varies once.
 
 `score_case()` is lru_cache'd so the assertions in test_case3.py share one pass over the API
 rather than re-running it per assertion, the same pattern as the other three suites.

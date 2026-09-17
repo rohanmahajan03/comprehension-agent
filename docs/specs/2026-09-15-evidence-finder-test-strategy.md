@@ -87,12 +87,12 @@ suites:
 
 - **Cheaper and faster.** Most of this suite is substring and offset arithmetic over one API
   call per fixture. No Sonnet generation, no Opus judging.
-- **Largely immune to the non-determinism that just derailed the stage 0 probe**
-  (`2026-09-15-stage0-probe-progress.md`: two identical runs disagreed by 0.21 on a judged
-  rate). A judge's *opinion* of a varying output varies twice over; a substring check over a
-  varying output varies once. "Is this string in the chapter" does not flap. That is why this
-  work is a better use of effort than settling the probe, and it should be said plainly rather
-  than discovered again.
+- **Largely immune to the non-determinism that sank the abandoned premise probe**
+  (`2026-09-14-concept-evidence-measurement-and-generalization.md` §3: two runs on identical
+  inputs disagreed by 0.21 on a judged rate, at `temperature=0`). A judge's *opinion* of a
+  varying output varies twice over; a substring check over a varying output varies once. "Is
+  this string in the chapter" does not flap. That is why this work was the better use of
+  effort, and it should be said plainly rather than discovered again.
 
 ## 2. The failure modes, ranked
 
@@ -163,9 +163,8 @@ that are legitimately *about that concept*. Then every returned quote can be loc
 and checked against those ranges.
 
 Store labels as **verbatim anchor strings resolved to offsets at import**, not as raw integer
-offsets — the same trick `tests/question_geval/probe.py` uses for its thickening fixtures, with
-an import-time assertion. Integer offsets silently rot the moment anyone reflows the source
-text in `graph_golden_set.md`; anchors fail loudly.
+offsets, with an import-time assertion that each still matches. Integer offsets silently rot the
+moment anyone reflows the source text in `graph_golden_set.md`; anchors fail loudly.
 
 ### The checks, all deterministic
 
@@ -259,9 +258,9 @@ by substring search, exactly as §4 says.
 
 - **Re-testing `text_match`.** Covered free and thoroughly in `tests/test_text_match.py`.
 - **Judging whether a quote is "good evidence" in the abstract.** Only the two questions in §5.
-- **The stage 0 non-determinism question.** Deferred
-  (`2026-09-15-stage0-probe-progress.md`); §1 explains why deterministic checks largely absorb
-  it here rather than needing it resolved first.
+- **The non-determinism of judged metrics.** §1 explains why deterministic checks largely absorb
+  it here rather than needing it resolved first; the premise probe that ran into it head-on was
+  abandoned (`2026-09-14-concept-evidence-measurement-and-generalization.md` §3).
 - **End-to-end "do better quotes produce better questions".** That is the parent spec's stage
   1a, deferred. This suite tests whether the *extractor* does its job, which is a prerequisite
   question and answerable on its own.

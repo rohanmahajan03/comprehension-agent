@@ -67,7 +67,7 @@ class Region:
 #
 # Stored as text rather than integer offsets on purpose: offsets rot silently the moment
 # anyone reflows a line in graph_golden_set.md, whereas an anchor that no longer matches fails
-# loudly at import. Same reasoning as tests/question_geval/probe.py's thickening fixtures.
+# loudly at import (_resolve below).
 _ANCHORS: dict[str, list[str]] = {
     "append_only_log": [
         "Our db_set function has pretty good performance because appending to a file is "
