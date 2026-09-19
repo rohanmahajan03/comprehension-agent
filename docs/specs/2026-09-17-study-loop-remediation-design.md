@@ -1,7 +1,20 @@
 # Study-loop remediation — design
 
-**Status:** proposed
+**Status:** implemented (see "Built as" below for where the build diverged from this text)
 **Scope:** fixes the diagnostic loop's missing return step and gives it a termination rule. Touches `backend/app/routers/study_session.py` (nearly all of it), `backend/app/models/schemas.py` (one response-model field), `backend/tests/conftest.py` (a scriptable evaluator stub), `backend/tests/test_flow.py`, `frontend/src/types/index.ts`, `frontend/src/pages/StudySessionPage.tsx`. **No Alembic migration, no `Store` change, no new service, no new LLM call.**
+
+## Built as
+
+Implemented as written, with four corrections to this document found during the build:
+
+- **§4's scope line and §7 misplace the response model.** `AnswerResponse` is declared inline in `routers/study_session.py`, not in `backend/app/models/schemas.py`. `revealed_answer` was added there; `schemas.py` is untouched, so the "one response-model field" in the scope line above never applied to it.
+- **§5 does not say what `current_concept_id` should be when *no* concept has questions.** It specifies the status (`COMPLETED`) and nothing else. Built as `None`. Consequence: a graph with **zero** concepts now yields a `COMPLETED` session where it previously yielded `ACTIVE` with `current_concept_id=None` — slightly wider than the case §5 describes, and strictly better, since an active session with nothing to ask is exactly the dead state §5 closes. Completed sessions are excluded from the resume list, so nothing downstream observes it.
+- **§9's fixture snippet never says how a test sets the script.** A bare `return []` fixture cannot be overridden per-test without a fixture override or indirect parametrization. Tests extend the list **in place** before the first answer — `stub_evaluator` closes over the same object and reads it per call — and the fixture docstring records that, since it is the non-obvious part.
+- **§9 lists six test cases but §5 states a seventh behavior** (no concept has questions → the session is born `COMPLETED`) that none of the six covers. `test_chapter_with_no_questions_starts_a_completed_session` was added for it.
+
+One consequence of §3 that this document never states as a student-visible outcome, implemented as specified: when the **chain** cap trips, the revealed answer is the *diagnostic's* `expected_answer_notes`, not the originating concept's, and failed diagnostics do not consume that concept's attempt budget — so the student returns to it with attempts still in hand. That is what makes the ceiling `A + (A-1) × C` rather than `A × (1 + C)`. `test_diagnostic_chain_cap_stops_drilling_and_returns_to_the_concept` pins it.
+
+**No pre-existing test assertion needed revising.** Each candidate was checked individually rather than inferred from a green run: `_answer_until_diagnosis` returns at the *first* wrong answer, so it never answers a diagnostic, and `test_study_session_loop_advances_or_diagnoses` answers twice from `ACTIVE`, so neither ever reached the `DIAGNOSING + correct` cell. That no test exercised the buggy transition is why §1a survived this long. The fix was mutation-tested instead: restoring the old unconditional advance turns four of the new tests red.
 
 ## 1. Context — three defects in one loop
 

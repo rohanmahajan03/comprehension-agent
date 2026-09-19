@@ -121,6 +121,42 @@ class DiagnosisResult(BaseModel):
     targeted_question: Question
 
 
+class AnswerOverride(BaseModel):
+    """A student's claim that the evaluator misgraded one answer, kept for later review.
+
+    A *second* record asserting the first is wrong, never an edit of it: the history entry
+    this points at keeps `eval_correct = False` and the evaluator's explanation verbatim,
+    since what the evaluator said is precisely the disputed artifact (design doc
+    docs/specs/2026-09-18-manual-answer-override-design.md §4).
+
+    Self-contained on purpose. Every other table here references `questions` by FK rather
+    than embedding a copy, but this row has to outlive what it describes:
+    `DELETE /api/study-session/{id}` cascades `history_entries`, and `delete_document`
+    cascades documents → concepts → questions. The ids below are therefore soft references
+    with no FK, and the four snapshot fields carry the text — which also pins the rubric as
+    it read *at grading time* rather than as a join would return it later (§5).
+    """
+
+    study_session_id: str
+    history_seq: int = Field(
+        description="Index into StudySession.history — the identity of the attempt, which "
+        "question_id alone is not, since a question is re-served on retry"
+    )
+    question_id: str
+    concept_id: str
+    doc_id: str
+    question_prompt: str
+    expected_answer_notes: str
+    student_answer: str
+    evaluator_explanation: str
+    student_note: str | None = Field(
+        default=None,
+        description="Why the student thinks the grade was wrong. Optional — requiring prose "
+        "behind the button would suppress the disagreements this exists to collect",
+    )
+    created_at: datetime = Field(default_factory=_now)
+
+
 class StudySessionStatus(str, Enum):
     ACTIVE = "active"
     DIAGNOSING = "diagnosing"

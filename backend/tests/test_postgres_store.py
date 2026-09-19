@@ -1,6 +1,6 @@
 """Tests for PostgresStore against a real Postgres instance.
 
-⚠️ DESTRUCTIVE. Every test starts by TRUNCATEing all five tables. It therefore reads
+⚠️ DESTRUCTIVE. Every test starts by TRUNCATEing all six tables. It therefore reads
 `TEST_DATABASE_URL`, **not** `DATABASE_URL` — pointing it at the working database would
 delete real documents, graphs, and study sessions. Two independent guards enforce that:
 the separate variable, and a check that the database name ends in `_test`.
@@ -28,6 +28,7 @@ from app.config import get_settings
 from app.db.engine import _session_factory, get_engine
 from app.models import (
     Answer,
+    AnswerOverride,
     Concept,
     DependencyGraph,
     DiagnosisResult,
@@ -88,8 +89,13 @@ def _clean_tables(_require_database: None):
     """Truncate everything before each test so cases can't see each other's rows.
 
     Real DB, not a rollback-per-test fixture: TRUNCATE is simple and fast enough for these
-    five small tables, and keeps each test's assertions readable against a known-empty start
+    six small tables, and keeps each test's assertions readable against a known-empty start
     rather than reasoning about pollution from whatever ran before it.
+
+    `answer_overrides` has to be named explicitly, unlike the tables that would fall out of
+    `documents` anyway: it carries no foreign keys by design (see AnswerOverrideRow), so
+    CASCADE never reaches it. Leaving it out is silent — the suite stays green while later
+    tests count rows earlier ones wrote.
 
     Depends explicitly on `_require_database` — without that, pytest doesn't guarantee the
     skip-check fixture runs first, and this one calling get_engine() with an empty
@@ -99,8 +105,8 @@ def _clean_tables(_require_database: None):
     with engine.begin() as conn:
         conn.execute(
             text(
-                "TRUNCATE documents, concepts, questions, study_sessions, history_entries "
-                "RESTART IDENTITY CASCADE"
+                "TRUNCATE documents, concepts, questions, study_sessions, history_entries, "
+                "answer_overrides RESTART IDENTITY CASCADE"
             )
         )
     yield
@@ -633,3 +639,91 @@ def test_save_document_resave_preserves_created_at() -> None:
     second = store.list_documents()[0]
 
     assert second.created_at == first.created_at
+
+
+def _override(study_session_id: str = "s1", history_seq: int = 0, **overrides) -> AnswerOverride:
+    fields = {
+        "study_session_id": study_session_id,
+        "history_seq": history_seq,
+        "question_id": "doc1:c1:q1",
+        "concept_id": "doc1:c1",
+        "doc_id": "doc1",
+        "question_prompt": "What is a limit?",
+        "expected_answer_notes": "The value a function approaches.",
+        "student_answer": "the value it tends toward",
+        "evaluator_explanation": "Did not mention approaching a point.",
+    }
+    return AnswerOverride(**{**fields, **overrides})
+
+
+def test_answer_override_round_trips(store: PostgresStore) -> None:
+    """Every field survives the write, including the null note.
+
+    The row is the whole record — nothing joins back to the question or the session (see
+    AnswerOverrideRow) — so a column lost here is a disagreement that can never be reviewed.
+    """
+    assert store.save_answer_override(_override(student_note="the rubric was wrong")) is True
+    assert store.save_answer_override(_override(history_seq=1)) is True
+
+    overrides = store.list_answer_overrides()
+    assert len(overrides) == 2
+
+    first = next(o for o in overrides if o.history_seq == 0)
+    assert first.study_session_id == "s1"
+    assert first.question_id == "doc1:c1:q1"
+    assert first.concept_id == "doc1:c1"
+    assert first.doc_id == "doc1"
+    assert first.question_prompt == "What is a limit?"
+    assert first.expected_answer_notes == "The value a function approaches."
+    assert first.student_answer == "the value it tends toward"
+    assert first.evaluator_explanation == "Did not mention approaching a point."
+    assert first.student_note == "the rubric was wrong"
+    assert first.created_at is not None
+
+    assert next(o for o in overrides if o.history_seq == 1).student_note is None
+
+
+def test_saving_the_same_history_entry_twice_returns_false_and_writes_once(
+    store: PostgresStore,
+) -> None:
+    """The bool is what stops a double-submitted override advancing a session twice.
+
+    It comes from ON CONFLICT DO NOTHING ... RETURNING, so this also pins that the unique
+    constraint on (study_session_id, history_seq) actually exists in the migrated schema —
+    without it the second call would insert a duplicate and report True.
+    """
+    assert store.save_answer_override(_override(student_note="first")) is True
+    assert store.save_answer_override(_override(student_note="second")) is False
+
+    overrides = store.list_answer_overrides()
+    assert len(overrides) == 1
+    assert overrides[0].student_note == "first", "the conflicting write must not overwrite"
+
+
+def test_answer_override_survives_deleting_its_study_session(store: PostgresStore) -> None:
+    """The reason this table has no foreign keys (design doc §5).
+
+    `DELETE /api/study-session/{id}` is a live button in the UI and cascades history_entries.
+    A corpus that exists to be reviewed later cannot be deleted by a student tidying up their
+    session list.
+    """
+    store.save_document("doc1", "chapter text")
+    store.save_graph(DependencyGraph(doc_id="doc1", concepts=[]))
+    store.save_study_session(StudySession(id="s1", doc_id="doc1", current_concept_id=None))
+    store.save_answer_override(_override())
+
+    store.delete_study_session("s1")
+
+    assert store.get_study_session("s1") is None
+    assert len(store.list_answer_overrides()) == 1
+
+
+def test_answer_override_survives_deleting_its_document(store: PostgresStore) -> None:
+    """The other cascade it has to outlive: documents → concepts → questions."""
+    store.save_document("doc1", "chapter text")
+    store.save_answer_override(_override())
+
+    store.delete_document("doc1")
+
+    assert store.get_document("doc1") is None
+    assert len(store.list_answer_overrides()) == 1

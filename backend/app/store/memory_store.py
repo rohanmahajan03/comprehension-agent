@@ -10,6 +10,7 @@ from abc import ABC, abstractmethod
 from datetime import UTC, datetime
 
 from app.models import (
+    AnswerOverride,
     Concept,
     DependencyGraph,
     DocumentStatus,
@@ -154,6 +155,35 @@ class Store(ABC):
         """
         ...
 
+    # --- answer overrides ---
+    @abstractmethod
+    def save_answer_override(self, override: AnswerOverride) -> bool:
+        """Record one override. True if a new row was written, False if this history
+        entry had already been overridden.
+
+        **The bool is load-bearing**, which is why this is the one `save_*` that returns
+        anything. An override appends nothing to history, so the entry it targets stays the
+        session's most recent one — a double-submitted click would otherwise pass the same
+        checks and advance the session a second time. The router treats False as "already
+        done" and skips the transition, making a repeat POST a true no-op rather than an
+        error the client has to interpret.
+
+        Keyed on `(study_session_id, history_seq)`. A re-save therefore also discards a
+        changed note; editing an override is not a use case, and no UI can reach it twice.
+        See docs/specs/2026-09-18-manual-answer-override-design.md §6.
+        """
+        ...
+
+    @abstractmethod
+    def list_answer_overrides(self) -> list[AnswerOverride]:
+        """Every recorded override, most recently created first.
+
+        No HTTP route exposes this — review is `psql` for now (design doc §8). It exists
+        because the write cannot otherwise be verified against real Postgres without
+        hand-rolled SQL, and it is the seam a read endpoint would sit on later.
+        """
+        ...
+
 
 class InMemoryStore(Store):
     def __init__(self) -> None:
@@ -166,6 +196,10 @@ class InMemoryStore(Store):
         self._graphs: dict[str, DependencyGraph] = {}
         self._questions: dict[str, list[Question]] = {}
         self._study_sessions: dict[str, StudySession] = {}
+        # Keyed by the override's identity, so a repeat write is detected without a scan.
+        # Deliberately NOT cleared by delete_document/delete_study_session below — the
+        # whole point of the record is to outlive what it describes (design doc §5).
+        self._answer_overrides: dict[tuple[str, int], AnswerOverride] = {}
 
     def save_document(
         self,
@@ -323,3 +357,13 @@ class InMemoryStore(Store):
         ]
         rows.sort(key=lambda r: r.updated_at, reverse=True)
         return rows
+
+    def save_answer_override(self, override: AnswerOverride) -> bool:
+        key = (override.study_session_id, override.history_seq)
+        if key in self._answer_overrides:
+            return False
+        self._answer_overrides[key] = override
+        return True
+
+    def list_answer_overrides(self) -> list[AnswerOverride]:
+        return sorted(self._answer_overrides.values(), key=lambda o: o.created_at, reverse=True)

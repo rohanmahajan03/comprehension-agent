@@ -17,9 +17,17 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import selectinload
 
 from app.db.engine import session_scope
-from app.db.models import ConceptRow, DocumentRow, HistoryEntryRow, QuestionRow, StudySessionRow
+from app.db.models import (
+    AnswerOverrideRow,
+    ConceptRow,
+    DocumentRow,
+    HistoryEntryRow,
+    QuestionRow,
+    StudySessionRow,
+)
 from app.models import (
     Answer,
+    AnswerOverride,
     Concept,
     DependencyGraph,
     DiagnosisResult,
@@ -391,6 +399,57 @@ class PostgresStore(Store):
                     current_concept_id=r.current_concept_id,
                     total_concepts=r.total_concepts,
                     updated_at=r.updated_at,
+                )
+                for r in rows
+            ]
+
+    def save_answer_override(self, override: AnswerOverride) -> bool:
+        """One statement does both the write and the already-overridden check.
+
+        `ON CONFLICT DO NOTHING ... RETURNING id` returns a row only when it actually
+        inserted, so the bool the Store contract requires comes back without a second query
+        and without a race between checking and writing. The conflict target is the
+        `(study_session_id, history_seq)` unique constraint on the table.
+        """
+        with session_scope() as session:
+            stmt = (
+                pg_insert(AnswerOverrideRow)
+                .values(
+                    study_session_id=override.study_session_id,
+                    history_seq=override.history_seq,
+                    question_id=override.question_id,
+                    concept_id=override.concept_id,
+                    doc_id=override.doc_id,
+                    question_prompt=override.question_prompt,
+                    expected_answer_notes=override.expected_answer_notes,
+                    student_answer=override.student_answer,
+                    evaluator_explanation=override.evaluator_explanation,
+                    student_note=override.student_note,
+                    created_at=override.created_at,
+                )
+                .on_conflict_do_nothing(index_elements=["study_session_id", "history_seq"])
+                .returning(AnswerOverrideRow.id)
+            )
+            return session.execute(stmt).scalar_one_or_none() is not None
+
+    def list_answer_overrides(self) -> list[AnswerOverride]:
+        with session_scope() as session:
+            rows = session.scalars(
+                select(AnswerOverrideRow).order_by(AnswerOverrideRow.created_at.desc())
+            ).all()
+            return [
+                AnswerOverride(
+                    study_session_id=r.study_session_id,
+                    history_seq=r.history_seq,
+                    question_id=r.question_id,
+                    concept_id=r.concept_id,
+                    doc_id=r.doc_id,
+                    question_prompt=r.question_prompt,
+                    expected_answer_notes=r.expected_answer_notes,
+                    student_answer=r.student_answer,
+                    evaluator_explanation=r.evaluator_explanation,
+                    student_note=r.student_note,
+                    created_at=r.created_at,
                 )
                 for r in rows
             ]

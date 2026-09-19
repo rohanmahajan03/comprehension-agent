@@ -4,8 +4,9 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
-from app.models import StudySessionStatus
-from app.services import graph_builder
+from app.models import Question, StudySessionStatus
+from app.routers.study_session import _MAX_CONCEPT_ATTEMPTS, _MAX_DIAGNOSTIC_CHAIN
+from app.services import graph_builder, question_generator
 from app.store import get_store
 
 client = TestClient(app)
@@ -163,6 +164,245 @@ def test_answer_next_question_matches_what_resuming_would_serve() -> None:
 
     resumed = client.get(f"/api/study-session/{study_session_id}").json()
     assert body["next_question"]["id"] == resumed["pending_question"]["id"]
+
+
+def _start(doc_id: str) -> dict:
+    response = client.post("/api/study-session/start", json={"doc_id": doc_id})
+    assert response.status_code == 201
+    return response.json()
+
+
+def _answer(session_id: str, question_id: str, text: str = "my answer") -> dict:
+    response = client.post(
+        f"/api/study-session/{session_id}/answer",
+        json={"question_id": question_id, "text": text},
+    )
+    assert response.status_code == 200
+    return response.json()
+
+
+def _answer_until_reveal(session: dict) -> tuple[dict, dict]:
+    """Follow the loop — answering whatever it serves next — until one of the caps trips.
+
+    The caller scripts the evaluator; this just walks the path a client would. Returns
+    (the question that was abandoned, the response that revealed its answer).
+    """
+    served = session["pending_question"]
+    body = _answer(session["id"], served["id"])
+    while body["revealed_answer"] is None:
+        assert body["next_question"] is not None, "the loop stalled with no question to serve"
+        served = body["next_question"]
+        body = _answer(session["id"], served["id"])
+    return served, body
+
+
+def test_correct_diagnostic_returns_to_the_concept_that_failed(
+    evaluator_script: list[bool],
+) -> None:
+    """The regression test for the loop's missing return step (design doc §1a).
+
+    Pipeline 2 exists to trace a wrong answer back to the prerequisite at fault, have the
+    student repair it, and then return. The correct-branch used to advance unconditionally,
+    so passing the diagnostic on prerequisite P marked concept X done without the student
+    ever demonstrating X — and inflated `completed_concepts` on the menu screen with it.
+    """
+    evaluator_script.extend([False, True])  # fail the concept, then pass its diagnostic
+    doc_id = _upload_chapter()
+    started = _start(doc_id)
+    concept_id = started["current_concept_id"]
+    question = started["pending_question"]
+
+    wrong = _answer(started["id"], question["id"])
+    assert wrong["study_session"]["status"] == "diagnosing"
+
+    body = _answer(started["id"], wrong["diagnosis"]["targeted_question"]["id"])
+    study_session = body["study_session"]
+    assert study_session["current_concept_id"] == concept_id, (
+        "closing the prerequisite gap must hand the student back the concept that exposed "
+        "it, not skip past it"
+    )
+    assert study_session["status"] == "active"
+    assert body["next_question"]["id"] == question["id"], (
+        "the concept's own question is re-served: diagnostic questions are appended after "
+        "the generated set, so index 0 is still the main-track question"
+    )
+    assert body["revealed_answer"] is None
+
+
+def test_concept_is_left_behind_only_once_answered_correctly(
+    evaluator_script: list[bool],
+) -> None:
+    """The other half of §2's rule: the retry is what advances, and nothing before it."""
+    evaluator_script.extend([False, True, True])  # fail X, pass the diagnostic, pass X
+    doc_id = _upload_chapter()
+    started = _start(doc_id)
+    question = started["pending_question"]
+
+    diagnostic = _answer(started["id"], question["id"])["diagnosis"]["targeted_question"]
+    returned = _answer(started["id"], diagnostic["id"])["study_session"]
+    assert returned["current_concept_id"] == f"{doc_id}:limits"
+
+    body = _answer(started["id"], question["id"])
+    # The stub graph's topological order is limits, continuity, derivatives, chain-rule,
+    # implicit-differentiation.
+    assert body["study_session"]["current_concept_id"] == f"{doc_id}:continuity"
+    assert body["study_session"]["status"] == "active"
+
+
+def test_attempt_cap_reveals_the_answer_and_moves_on(evaluator_script: list[bool]) -> None:
+    """Without a cap on attempts, §2's return rule would re-serve X forever (design doc §3).
+
+    Each failure is followed by a passed diagnostic, so the drill never stalls — only the
+    count of wrong answers on X's own question decides. The final attempt triggers no
+    diagnosis: the loop gives up instead, which is what makes the ceiling A + (A-1) × C
+    rather than A × (1 + C).
+    """
+    evaluator_script.extend([False, True] * (_MAX_CONCEPT_ATTEMPTS - 1) + [False])
+    doc_id = _upload_chapter()
+    started = _start(doc_id)
+
+    abandoned, body = _answer_until_reveal(started)
+    assert abandoned["id"] == started["pending_question"]["id"]
+    assert body["revealed_answer"] == abandoned["expected_answer_notes"]
+    assert body["diagnosis"] is None, "the capped attempt gives up instead of drilling again"
+    assert body["study_session"]["status"] == "active"
+    assert body["study_session"]["current_concept_id"] == f"{doc_id}:continuity", (
+        "a capped concept is left unmastered, deliberately, rather than parked on"
+    )
+
+    failures = [
+        entry
+        for entry in body["study_session"]["history"]
+        if entry["question"]["id"] == abandoned["id"] and not entry["evaluation"]["correct"]
+    ]
+    assert len(failures) == _MAX_CONCEPT_ATTEMPTS
+
+
+def test_diagnostic_chain_cap_stops_drilling_and_returns_to_the_concept(
+    evaluator_script: list[bool],
+) -> None:
+    """The second door (design doc §3): a student failing every diagnostic.
+
+    The session starts on a root concept, so the stub diagnoser names it as its own suspect
+    — the documented shape that makes the drill unbounded without this cap. Giving up here
+    returns to the concept rather than advancing, because the concept itself has not been
+    abandoned: its own attempt budget is untouched by failed diagnostics.
+    """
+    evaluator_script.extend([False] * (_MAX_DIAGNOSTIC_CHAIN + 1))
+    doc_id = _upload_chapter()
+    started = _start(doc_id)
+    question = started["pending_question"]
+
+    abandoned, body = _answer_until_reveal(started)
+    assert abandoned["id"] != question["id"], "the abandoned question is the last diagnostic"
+    assert body["revealed_answer"] == abandoned["expected_answer_notes"]
+    assert body["diagnosis"] is None
+    assert body["study_session"]["status"] == "active"
+    assert body["study_session"]["current_concept_id"] == f"{doc_id}:limits"
+    assert body["next_question"]["id"] == question["id"], (
+        "the student is handed back the concept's own question, with attempts left on it"
+    )
+    assert len(body["study_session"]["history"]) == 1 + _MAX_DIAGNOSTIC_CHAIN
+
+
+def test_reveal_and_next_question_arrive_in_one_response(
+    evaluator_script: list[bool],
+) -> None:
+    """One response carries both halves when a cap trips mid-chapter (design doc §7).
+
+    The frontend renders the reveal in the result card and the next question below it, so
+    the student is never left with an answer and nothing to do — and the next question is
+    the same one the resume path would serve.
+    """
+    evaluator_script.extend([False, True] * (_MAX_CONCEPT_ATTEMPTS - 1) + [False])
+    doc_id = _upload_chapter()
+    started = _start(doc_id)
+
+    _, body = _answer_until_reveal(started)
+    assert body["revealed_answer"]
+    assert body["next_question"]["id"] == f"{doc_id}:continuity:q1"
+
+    resumed = client.get(f"/api/study-session/{started['id']}").json()
+    assert resumed["pending_question"]["id"] == body["next_question"]["id"]
+
+
+def _generate_one_question_except(*empty_slugs: str):
+    """Stand in for conftest's question-generator stub, leaving the named concepts empty.
+
+    `question_generator`'s rule 3 tells the model to skip any question type that doesn't fit
+    the evidence, so a concept legitimately coming back with no questions is what this
+    reproduces — the conftest stub always writes two per concept and can't.
+    """
+
+    def _generate(graph) -> None:
+        for concept in graph.concepts:
+            slug = concept.id.split(":", 1)[1]
+            concept.questions = (
+                []
+                if slug in empty_slugs
+                else [
+                    Question(
+                        id=f"{concept.id}:q1",
+                        concept_id=concept.id,
+                        prompt=f"In your own words, explain what “{concept.name}” means.",
+                        expected_answer_notes=f"A correct answer restates: {concept.summary}",
+                    )
+                ]
+            )
+
+    return _generate
+
+
+def test_concepts_without_questions_are_skipped(
+    monkeypatch: pytest.MonkeyPatch, evaluator_script: list[bool]
+) -> None:
+    """A question-less concept is stepped over, not parked on (design doc §1c, §5).
+
+    Parking on one leaves `_pending_question` returning None: the UI renders "No question
+    available", there is nothing to submit, and the session is deadlocked permanently. Both
+    ways in are guarded — `start_study_session` at birth, `_advance` mid-chapter.
+    """
+    evaluator_script.append(True)
+    monkeypatch.setattr(
+        question_generator,
+        "generate_questions",
+        _generate_one_question_except("limits", "derivatives"),
+    )
+    doc_id = _upload_chapter()
+
+    started = _start(doc_id)
+    assert started["current_concept_id"] == f"{doc_id}:continuity", (
+        "the first concept in topological order has no question, so the session opens on "
+        "the next one that does"
+    )
+    assert started["pending_question"] is not None
+
+    body = _answer(started["id"], started["pending_question"]["id"])
+    assert body["study_session"]["current_concept_id"] == f"{doc_id}:chain-rule", (
+        "advancing skips `derivatives`, which has no question to serve"
+    )
+    assert body["next_question"] is not None
+
+
+def test_chapter_with_no_questions_starts_a_completed_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The degenerate end of the same guard: nothing to ask means nothing to study.
+
+    Born completed rather than 201-ing into an active session with no question, which the
+    student could neither answer nor leave.
+    """
+
+    def _no_questions(graph) -> None:
+        for concept in graph.concepts:
+            concept.questions = []
+
+    monkeypatch.setattr(question_generator, "generate_questions", _no_questions)
+    doc_id = _upload_chapter()
+
+    started = _start(doc_id)
+    assert started["status"] == "completed"
+    assert started["pending_question"] is None
 
 
 def test_graph_404_for_unknown_doc() -> None:

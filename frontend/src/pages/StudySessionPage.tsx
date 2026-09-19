@@ -1,5 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
-import { getGraph, getStudySession, startStudySession, submitAnswer } from '../api/client'
+import {
+  getGraph,
+  getStudySession,
+  overrideAnswer,
+  startStudySession,
+  submitAnswer,
+} from '../api/client'
 import { QuestionCard } from '../components/QuestionCard'
 import type {
   AnswerResponse,
@@ -22,6 +28,10 @@ export function StudySessionPage({ docId, sessionId, onExit }: Props) {
   const [question, setQuestion] = useState<Question | null>(null)
   const [lastResult, setLastResult] = useState<AnswerResponse | null>(null)
   const [submitting, setSubmitting] = useState(false)
+  // Both transient, like the evidence notice in ReviewGraphPage: an override is a
+  // one-shot action on the result currently on screen, with nothing to restore on reload.
+  const [overriding, setOverriding] = useState(false)
+  const [overrideNote, setOverrideNote] = useState('')
   const [error, setError] = useState<string | null>(null)
   // Caches the in-flight `startStudySession` call per docId so React StrictMode's dev-mode
   // double-invoke of the mount effect below reuses the one POST instead of firing a second.
@@ -79,6 +89,39 @@ export function StudySessionPage({ docId, sessionId, onExit }: Props) {
       setLastResult(result)
       setStudySession(result.study_session)
       setQuestion(result.next_question)
+      // A fresh result is a fresh grade to agree or disagree with, so the panel never
+      // carries a half-typed note from the previous question into this one.
+      setOverriding(false)
+      setOverrideNote('')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  const handleOverride = async () => {
+    // The answer just graded is the last history entry — derived from `lastResult` rather
+    // than tracked in a second state, so the id and the result it belongs to cannot drift.
+    // It is also the only entry the server will accept (it 409s on any older one).
+    const history = lastResult?.study_session.history ?? []
+    const answered = history[history.length - 1]
+    if (!studySession || !answered) return
+    setSubmitting(true)
+    setError(null)
+    try {
+      const detail = await overrideAnswer(studySession.id, {
+        question_id: answered.question.id,
+        note: overrideNote.trim() || null,
+      })
+      // Clearing `lastResult` retires the card the button lives in: the grade has been
+      // disputed and the session has moved, so leaving the old verdict on screen would
+      // invite a second click at a question that is no longer current.
+      setLastResult(null)
+      setOverriding(false)
+      setOverrideNote('')
+      setStudySession(detail)
+      setQuestion(detail.pending_question)
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     } finally {
@@ -113,6 +156,14 @@ export function StudySessionPage({ docId, sessionId, onExit }: Props) {
             </span>
           </p>
           <p>{lastResult.evaluation.explanation}</p>
+          {/* Only set when a cap tripped, so its presence *is* the message that the loop
+              gave up on that question — the heading says so before the answer lands. */}
+          {lastResult.revealed_answer && (
+            <>
+              <h4>Moving on — the answer we were looking for</h4>
+              <p>{lastResult.revealed_answer}</p>
+            </>
+          )}
           {lastResult.diagnosis && (
             <>
               <h4>
@@ -121,6 +172,40 @@ export function StudySessionPage({ docId, sessionId, onExit }: Props) {
               <p>{lastResult.diagnosis.reasoning}</p>
             </>
           )}
+          {/* The grader is a model and gets this wrong often enough to need a channel, so
+              every incorrect result offers one. Opens in place rather than in a dialog,
+              matching the delete confirmation in SessionList. */}
+          {!lastResult.evaluation.correct &&
+            (overriding ? (
+              <div className="override-panel">
+                <label htmlFor="override-note">
+                  Why do you think your answer was right? (optional)
+                </label>
+                <textarea
+                  id="override-note"
+                  rows={3}
+                  value={overrideNote}
+                  onChange={(e) => setOverrideNote(e.target.value)}
+                  placeholder="e.g. the rubric wanted an example, but the question asked for a definition"
+                />
+                <div className="override-actions">
+                  <button
+                    className="session-cancel"
+                    onClick={() => setOverriding(false)}
+                    disabled={submitting}
+                  >
+                    Cancel
+                  </button>
+                  <button onClick={handleOverride} disabled={submitting}>
+                    {submitting ? 'Recording…' : 'Record and move on'}
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <button className="override-open" onClick={() => setOverriding(true)}>
+                I think this was correct
+              </button>
+            ))}
         </div>
       )}
 

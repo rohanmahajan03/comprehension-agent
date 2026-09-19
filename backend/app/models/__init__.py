@@ -1,5 +1,6 @@
 from app.models.schemas import (
     Answer,
+    AnswerOverride,
     Concept,
     DependencyGraph,
     DiagnosisResult,
@@ -18,6 +19,7 @@ from app.models.schemas import (
 
 __all__ = [
     "Answer",
+    "AnswerOverride",
     "Concept",
     "DependencyGraph",
     "DiagnosisResult",

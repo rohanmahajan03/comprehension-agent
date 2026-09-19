@@ -52,17 +52,44 @@ _SAMPLE_CONCEPTS: list[tuple[str, str, str, list[str]]] = [
 ]
 
 
+@pytest.fixture
+def evaluator_script() -> list[bool]:
+    """Scripted evaluator outcomes, consumed in order, for tests that need a specific
+    sequence (the attempt and chain caps). Empty by default, which keeps the alternating
+    behavior every existing test was written against.
+
+    A test scripts itself by extending this list in place *before* the first answer —
+    `stub_evaluator` holds the same object and reads it per call, so there is no fixture
+    override or indirect parametrization to set up.
+    """
+    return []
+
+
 @pytest.fixture(autouse=True)
-def stub_evaluator(monkeypatch: pytest.MonkeyPatch) -> None:
+def stub_evaluator(monkeypatch: pytest.MonkeyPatch, evaluator_script: list[bool]) -> None:
     """Replace the real LLM call with a deterministic stub so tests never hit the API.
 
     Alternates correct/incorrect per call so both the "advance" and "diagnose"
-    branches of the study-session loop get exercised, mirroring the old stub.
+    branches of the study-session loop get exercised, mirroring the old stub — unless
+    `evaluator_script` is non-empty, in which case it is authoritative. The alternating
+    default makes "wrong, wrong, wrong" unreachable, which is the shape every cap test in
+    the study loop needs (docs/specs/2026-09-17-study-loop-remediation-design.md §9).
     """
     call_counter = count()
 
     def _fake_evaluate(question: Question, answer: Answer) -> EvaluationResult:
-        correct = next(call_counter) % 2 == 0
+        index = next(call_counter)
+        if evaluator_script:
+            if index >= len(evaluator_script):
+                # Loud rather than silently falling back to alternation halfway through a
+                # cap test, which would make the test measure a sequence nobody wrote.
+                raise AssertionError(
+                    f"evaluator_script exhausted: {index + 1} evaluator calls made, but the "
+                    f"script supplies {len(evaluator_script)}"
+                )
+            correct = evaluator_script[index]
+        else:
+            correct = index % 2 == 0
         return EvaluationResult(
             correct=correct,
             explanation=f"[test stub] marked {'correct' if correct else 'incorrect'}",

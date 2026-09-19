@@ -453,3 +453,53 @@ button:disabled {
 .evidence-stored .evidence-quotes {
   padding: 0.35rem 0 0 1rem;
 }
+
+/* --- Answer override (the "I think this was correct" affordance on a wrong result) --- */
+
+/* Quieter than the global button: it sits under a verdict the student is reading, and a
+   full-weight indigo control there reads as the primary next step, which it isn't. */
+.override-open {
+  background: transparent;
+  color: #4b5bd7;
+  border: 1px solid #c9c9e0;
+  padding: 0.35rem 0.75rem;
+  font-size: 0.9rem;
+}
+
+.override-open:hover:not(:disabled) {
+  background: #eeeef8;
+}
+
+/* Opens in place, like .session-row-confirming — neutral rather than danger-tinted, since
+   disagreeing with a grade is an ordinary action and nothing is destroyed by it. */
+.override-panel {
+  margin-top: 0.75rem;
+  padding: 0.75rem 1rem;
+  background: #f7f7fb;
+  border: 1px solid #e3e3ee;
+  border-radius: 8px;
+}
+
+.override-panel label {
+  display: block;
+  font-size: 0.85rem;
+  color: #555;
+  margin-bottom: 0.4rem;
+}
+
+.override-panel textarea {
+  width: 100%;
+  box-sizing: border-box;
+  font: inherit;
+  padding: 0.5rem;
+  border: 1px solid #ccc;
+  border-radius: 8px;
+  resize: vertical;
+}
+
+.override-actions {
+  display: flex;
+  gap: 0.5rem;
+  justify-content: flex-end;
+  margin-top: 0.5rem;
+}

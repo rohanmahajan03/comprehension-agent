@@ -1,5 +1,6 @@
 import type {
   Answer,
+  AnswerOverrideRequest,
   AnswerResponse,
   Concept,
   DependencyGraph,
@@ -75,6 +76,19 @@ export function submitAnswer(studySessionId: string, answer: Answer): Promise<An
   return request(`/api/study-session/${encodeURIComponent(studySessionId)}/answer`, {
     method: 'POST',
     body: JSON.stringify(answer),
+  })
+}
+
+// Records that the evaluator misgraded the session's most recent answer, and advances the
+// session as a correct answer would. Only the newest answer is overridable — the server
+// 409s otherwise, since the transition depends on the session's current status.
+export function overrideAnswer(
+  studySessionId: string,
+  body: AnswerOverrideRequest
+): Promise<StudySessionDetail> {
+  return request(`/api/study-session/${encodeURIComponent(studySessionId)}/override`, {
+    method: 'POST',
+    body: JSON.stringify(body),
   })
 }
 

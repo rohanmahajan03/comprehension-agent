@@ -119,3 +119,45 @@ class HistoryEntryRow(Base):
     targeted_question: Mapped[QuestionRow | None] = relationship(
         foreign_keys=[diagnosis_targeted_question_id]
     )
+
+
+class AnswerOverrideRow(Base):
+    """A student's claim that the evaluator misgraded an answer — the tuning corpus.
+
+    The one table here with **no foreign keys and no relationships**, deliberately. Every
+    other row is live state that should disappear with its parent; this one is a record that
+    has to outlive what it describes, and both delete paths that reach the rest of the schema
+    (`study_sessions` → `history_entries`, `documents` → `concepts` → `questions`) cascade.
+    Soft string references keep the join possible while those rows exist without making the
+    record's survival conditional on them. See
+    docs/specs/2026-09-18-manual-answer-override-design.md §5.
+    """
+
+    __tablename__ = "answer_overrides"
+    # Identifies the *attempt*, not the question: a concept's question is re-served on retry
+    # (docs/specs/2026-09-17-study-loop-remediation-design.md §2), so one question id can
+    # appear in a session's history several times. This is also the idempotency key — the
+    # override appends nothing to history, so a double-submitted click would otherwise find
+    # the same entry and advance the session twice (§6).
+    __table_args__ = (UniqueConstraint("study_session_id", "history_seq"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    study_session_id: Mapped[str]
+    history_seq: Mapped[int]
+    question_id: Mapped[str]
+    concept_id: Mapped[str]
+    doc_id: Mapped[str]
+    # Snapshotted rather than joined: the rubric is the disputed artifact, so it has to be
+    # stored as it read at grading time, not as a join would return it at export time.
+    question_prompt: Mapped[str]
+    expected_answer_notes: Mapped[str]
+    student_answer: Mapped[str]
+    evaluator_explanation: Mapped[str]
+    # Nullable: the note is optional, because requiring prose behind the button would
+    # suppress the disagreements this table exists to collect.
+    student_note: Mapped[str | None]
+    # Written by PostgresStore on insert (like StudySessionRow's timestamps, unlike
+    # DocumentRow.created_at) so the value matches what InMemoryStore produces.
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )

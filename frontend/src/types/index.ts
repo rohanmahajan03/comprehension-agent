@@ -136,4 +136,18 @@ export interface AnswerResponse {
   diagnosis: DiagnosisResult | null
   next_question: Question | null
   study_session: StudySession
+  // The abandoned question's model answer, set only when an attempt/diagnostic cap tripped
+  // and the loop moved on without the student getting it right. Response-only — nothing
+  // stores it, so reloading the session loses the banner (the history entry recording the
+  // failed attempt is what persists).
+  revealed_answer: string | null
+}
+
+// Body of POST /api/study-session/{id}/override. The student's claim that the evaluator
+// misgraded their last answer; the response is a StudySessionDetail carrying the advanced
+// session. `note` is optional — requiring prose behind the button would suppress the
+// disagreements the feature exists to collect.
+export interface AnswerOverrideRequest {
+  question_id: string
+  note: string | null
 }
