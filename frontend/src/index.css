@@ -454,6 +454,17 @@ button:disabled {
   padding: 0.35rem 0 0 1rem;
 }
 
+/* What the student actually wrote, restated above the verdict. Smaller and muted so it
+   reads as a record of the attempt rather than as more of the grader's prose — the
+   explanation right below it is the model talking. `pre-wrap` because this came out of a
+   textarea and the student's own line breaks should survive. */
+.answered-response {
+  margin: 0.35rem 0 0.9rem;
+  font-size: 0.85rem;
+  color: #555;
+  white-space: pre-wrap;
+}
+
 /* --- Answer override (the "I think this was correct" affordance on a wrong result) --- */
 
 /* Quieter than the global button: it sits under a verdict the student is reading, and a
