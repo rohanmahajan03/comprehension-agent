@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 from app.models import (
     Answer,
     AnswerOverride,
+    has_pipeline_one_question,
     DependencyGraph,
     DiagnosisResult,
     DocumentStatus,
@@ -98,10 +99,15 @@ def list_study_sessions() -> list[StudySessionSummary]:
     """The "continue a session" list: unfinished sessions, most recently updated first.
 
     The store returns everything storage can join cheaply; the one field it can't supply is
-    `completed_concepts`, which is the position of `current_concept_id` in the chapter's
-    topological order — the same ordering `submit_answer` advances through. That needs
-    `topological_order`, and a Store importing from `app.services` would invert the layering
-    every other module follows, so the enrichment happens here instead.
+    `completed_concepts` — how many *testable* concepts sit before `current_concept_id` in
+    the chapter's topological order, the same ordering `submit_answer` advances through.
+    That needs `topological_order`, and a Store importing from `app.services` would invert
+    the layering every other module follows, so the enrichment happens here instead.
+
+    Both halves of the fraction exclude concepts `question_generator` returned nothing for:
+    they are skipped by `_advance`, not drawn in the graph, and counting them in one half
+    only would make the ratio lie (see
+    docs/specs/2026-09-20-graph-progress-coloring-design.md §4).
 
     Graphs are loaded once per *distinct* document, not once per session: two sessions on
     the same chapter cost one graph read between them.
@@ -110,9 +116,19 @@ def list_study_sessions() -> list[StudySessionSummary]:
     rows = store.list_unfinished_sessions()
 
     orders: dict[str, list[str]] = {}
+    testable: dict[str, set[str]] = {}
     for doc_id in {row.doc_id for row in rows}:
         graph = store.get_graph(doc_id)
         orders[doc_id] = [c.id for c in topological_order(graph)] if graph else []
+        testable[doc_id] = (
+            {
+                c.id
+                for c in graph.concepts
+                if has_pipeline_one_question(q.id for q in c.questions)
+            }
+            if graph
+            else set()
+        )
 
     def completed(row: StudySessionSummaryRow) -> int:
         # None means the session was created against a graph with no concepts and has
@@ -121,7 +137,16 @@ def list_study_sessions() -> list[StudySessionSummary]:
         if row.current_concept_id is None:
             return 0
         order = orders.get(row.doc_id, [])
-        return order.index(row.current_concept_id) if row.current_concept_id in order else 0
+        if row.current_concept_id not in order:
+            return 0
+        # Counted over the *full* order but filtered to testable concepts, rather than
+        # indexing into a pre-filtered list. `total_concepts` excludes question-less
+        # concepts, so counting them here would let the fraction read "8 of 7"; and
+        # `current_concept_id` itself is not guaranteed testable — `_advance` accepts any
+        # concept `get_questions` answers for, which includes one holding nothing but a
+        # diagnostic question the loop generated earlier in this session.
+        reached = order[: order.index(row.current_concept_id)]
+        return sum(1 for concept_id in reached if concept_id in testable.get(row.doc_id, set()))
 
     return [
         StudySessionSummary(
@@ -223,7 +248,7 @@ def _failed_main_track_attempts(study_session: StudySession, concept_id: str) ->
     return sum(
         1
         for entry in study_session.history
-        if not entry.evaluation.correct
+        if not entry.effective_correct
         and entry.question.concept_id == concept_id
         and entry.question.id not in diagnostics
     )
@@ -281,11 +306,18 @@ def override_answer(
     half), and the session takes the same transition a correct answer would (the immediate
     half). See docs/specs/2026-09-18-manual-answer-override-design.md.
 
-    **The history entry is deliberately left as graded** — `eval_correct` stays False with
-    the evaluator's explanation intact. What the evaluator said is the disputed artifact, so
+    **The evaluator's verdict is deliberately left as graded** — `eval_correct` stays False
+    with the explanation intact. What the evaluator said is the disputed artifact, so
     overwriting it would destroy the evidence and make a session replay show agreement where
-    there was none (§4). The consequence to know about: the overridden attempt still counts
-    toward `_MAX_CONCEPT_ATTEMPTS` for that concept.
+    there was none (§4).
+
+    The disagreement rides alongside it instead, as `HistoryEntry.overridden`, derived from
+    `answer_overrides` on every load. So the two facts coexist and **the effective outcome
+    is `evaluation.correct or overridden`** (`HistoryEntry.effective_correct`), which is
+    what the attempt cap and the client's graph colouring both read. An overridden attempt
+    therefore no longer counts toward `_MAX_CONCEPT_ATTEMPTS` — it advanced the session
+    exactly as a correct answer would have, so counting it as a failure would drive the
+    concept toward being abandoned on the strength of a grade the student overturned.
     """
     store = get_store()
     study_session = store.get_study_session(study_session_id)
@@ -338,6 +370,11 @@ def override_answer(
         # the newest one and every check above passed a second time — without this the
         # session would advance twice on a double-submitted click (§6).
         return _with_pending(store, study_session)
+
+    # The stores derive this on load; set it here too so the response this request returns
+    # already reflects the override, without a re-read. Every reader of the entry below —
+    # `_failed_main_track_attempts` included — sees it from this point on.
+    entry.overridden = True
 
     # Which transition applies is a fact about the *entry*, not about the session's current
     # status. By the time an override arrives the status already reflects what the wrong

@@ -89,8 +89,15 @@ export type StudySessionStatus = 'active' | 'diagnosing' | 'completed'
 export interface HistoryEntry {
   question: Question
   answer: Answer
+  /** The evaluator's own verdict, never rewritten — what it said is the disputed artifact
+   *  when a student overrides it. */
   evaluation: EvaluationResult
   diagnosis: DiagnosisResult | null
+  /** Whether the student successfully disputed that verdict. Derived server-side from
+   *  `answer_overrides` on every load, so it survives reload and is visible to every
+   *  reader. The effective outcome is `evaluation.correct || overridden` — see
+   *  `lib/conceptProgress.ts`, which is the one place that combines them. */
+  overridden: boolean
 }
 
 export interface StudySession {

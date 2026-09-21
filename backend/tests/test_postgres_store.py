@@ -475,6 +475,10 @@ def test_list_unfinished_sessions_joins_title_and_counts_concepts() -> None:
     store.save_graph(
         DependencyGraph(doc_id="d2", concepts=[Concept(id="d2:a", name="A", summary="s")])
     )
+    # The count reports *testable* concepts, so every concept here needs a pipeline-1
+    # question — see test_concept_counts_exclude_question_less_concepts below.
+    for concept_id in ("d1:a", "d1:b", "d2:a"):
+        store.save_questions(concept_id, [_q(concept_id, "q1")])
 
     store.save_study_session(StudySession(id="s1", doc_id="d1", current_concept_id="d1:b"))
     store.save_study_session(StudySession(id="s2", doc_id="d2"))
@@ -537,6 +541,8 @@ def test_list_documents_excludes_zero_concept_documents_and_reports_fields() -> 
     store.save_graph(
         DependencyGraph(doc_id="d2", concepts=[Concept(id="d2:a", name="A", summary="s")])
     )
+    for concept_id in ("d1:a", "d1:b", "d2:a"):
+        store.save_questions(concept_id, [_q(concept_id, "q1")])
 
     by_id = {r.id: r for r in store.list_documents()}
 
@@ -545,6 +551,62 @@ def test_list_documents_excludes_zero_concept_documents_and_reports_fields() -> 
     assert by_id["d1"].total_concepts == 2
     assert by_id["d2"].title is None
     assert by_id["d2"].total_concepts == 1
+
+
+def _q(concept_id: str, suffix: str) -> Question:
+    return Question(
+        id=f"{concept_id}:{suffix}",
+        concept_id=concept_id,
+        prompt="p",
+        expected_answer_notes="n",
+    )
+
+
+def test_concept_counts_exclude_question_less_concepts(store: PostgresStore) -> None:
+    """The Postgres half of `has_pipeline_one_question`, against the real regex operator.
+
+    Parity with TestTestableConceptCounts in test_memory_store.py. This is the only place
+    the `~ ':diagnostic[0-9]+$'` predicate actually runs — the in-memory store uses Python's
+    `re`, so a broken SQL pattern would otherwise pass every free test.
+    """
+    store.save_document("d1", "text", "Chapter")
+    store.save_graph(
+        DependencyGraph(
+            doc_id="d1",
+            concepts=[
+                Concept(id="d1:a", name="A", summary="s"),
+                Concept(id="d1:thin", name="Thin", summary="s"),
+                Concept(id="d1:probed", name="Probed", summary="s"),
+                # The case a LIKE '%diagnostic%' pattern would misclassify.
+                Concept(id="d1:diagnostic-tools", name="Diagnostic tools", summary="s"),
+            ],
+        )
+    )
+    store.save_questions("d1:a", [_q("d1:a", "q1"), _q("d1:a", "q2")])
+    store.save_questions("d1:diagnostic-tools", [_q("d1:diagnostic-tools", "q1")])
+    # Only a probe the diagnoser minted: not testable, must not be counted.
+    store.save_questions("d1:probed", [_q("d1:probed", "diagnostic1")])
+    # d1:thin gets nothing at all.
+
+    assert store.list_documents()[0].total_concepts == 2
+
+    store.save_study_session(StudySession(id="s1", doc_id="d1", current_concept_id="d1:a"))
+    assert store.list_unfinished_sessions()[0].total_concepts == 2
+
+
+def test_a_document_whose_every_concept_is_question_less_is_still_listed(
+    store: PostgresStore,
+) -> None:
+    """The visibility gate stays on the raw concept count, so such a chapter appears with
+    0 rather than vanishing. Parity with the InMemoryStore assertion of the same name."""
+    store.save_document("d1", "text", "Chapter")
+    store.save_graph(
+        DependencyGraph(doc_id="d1", concepts=[Concept(id="d1:thin", name="Thin", summary="s")])
+    )
+
+    rows = store.list_documents()
+    assert [r.id for r in rows] == ["d1"]
+    assert rows[0].total_concepts == 0
 
 
 def test_document_status_round_trips_and_finalizes(store: PostgresStore) -> None:
@@ -727,3 +789,64 @@ def test_answer_override_survives_deleting_its_document(store: PostgresStore) ->
 
     assert store.get_document("doc1") is None
     assert len(store.list_answer_overrides()) == 1
+
+
+def test_get_study_session_reports_overridden_entries(store: PostgresStore) -> None:
+    """`HistoryEntry.overridden` is resolved from `answer_overrides` on load.
+
+    There is no column for it and no foreign key to join on — that table deliberately
+    carries none, so it can outlive both cascade chains — so this is matched on the soft
+    `(study_session_id, history_seq)` key. Parity with InMemoryStore._mark_overridden.
+    """
+    store.save_document("doc1", "text")
+    store.save_graph(
+        DependencyGraph(doc_id="doc1", concepts=[Concept(id="doc1:a", name="A", summary="s")])
+    )
+    q1 = Question(id="doc1:a:q1", concept_id="doc1:a", prompt="q1", expected_answer_notes="n")
+    q2 = Question(id="doc1:a:q2", concept_id="doc1:a", prompt="q2", expected_answer_notes="n")
+    store.save_questions("doc1:a", [q1, q2])
+
+    session = StudySession(id="sess1", doc_id="doc1", current_concept_id="doc1:a")
+    for q in (q1, q2):
+        session.history.append(
+            HistoryEntry(
+                question=q,
+                answer=Answer(question_id=q.id, text="an answer"),
+                evaluation=EvaluationResult(correct=False, explanation="missing X"),
+            )
+        )
+    store.save_study_session(session)
+    store.save_answer_override(_override(study_session_id="sess1", history_seq=1))
+
+    loaded = store.get_study_session("sess1")
+    assert loaded is not None
+    assert [e.overridden for e in loaded.history] == [False, True]
+    # The verdict itself is never rewritten; the two facts coexist.
+    assert [e.evaluation.correct for e in loaded.history] == [False, False]
+    assert [e.effective_correct for e in loaded.history] == [False, True]
+
+
+def test_overridden_flags_are_scoped_to_their_own_session(store: PostgresStore) -> None:
+    """history_seq is an index, so it repeats across sessions — the lookup has to be
+    filtered by study_session_id or one session's override would flag another's entry."""
+    store.save_document("doc1", "text")
+    store.save_graph(
+        DependencyGraph(doc_id="doc1", concepts=[Concept(id="doc1:a", name="A", summary="s")])
+    )
+    q1 = Question(id="doc1:a:q1", concept_id="doc1:a", prompt="q1", expected_answer_notes="n")
+    store.save_questions("doc1:a", [q1])
+
+    for session_id in ("sess1", "sess2"):
+        session = StudySession(id=session_id, doc_id="doc1", current_concept_id="doc1:a")
+        session.history.append(
+            HistoryEntry(
+                question=q1,
+                answer=Answer(question_id=q1.id, text="an answer"),
+                evaluation=EvaluationResult(correct=False, explanation="missing X"),
+            )
+        )
+        store.save_study_session(session)
+    store.save_answer_override(_override(study_session_id="sess1", history_seq=0))
+
+    assert store.get_study_session("sess1").history[0].overridden is True
+    assert store.get_study_session("sess2").history[0].overridden is False

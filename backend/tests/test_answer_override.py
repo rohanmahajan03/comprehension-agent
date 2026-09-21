@@ -319,3 +319,74 @@ def test_override_on_a_completed_session_records_without_reviving_it(
     assert response.json()["status"] == "completed", "a finished session must stay finished"
 
     assert _overrides_for(session["id"])[0].student_note == "last one was fine"
+
+
+def test_an_override_marks_the_entry_correct_for_every_later_reader(
+    wrong_first_answer: list[bool],
+) -> None:
+    """`evaluation.correct` stays False — the disputed grade is the evidence — but the
+    entry also reports `overridden`, and that is what readers combine with it.
+
+    Both halves are asserted together on purpose: keeping the verdict intact is only
+    defensible while the disagreement travels beside it, and derived state that reaches
+    the response but not a later GET would be worse than none.
+    """
+    doc_id = _upload_chapter()
+    session = _start(doc_id)
+    question = client.get(f"/api/questions/{session['current_concept_id']}").json()[0]
+    _answer(session["id"], question["id"], "an answer the grader disliked")
+
+    detail = _override(session["id"], question["id"]).json()
+    entry = detail["history"][-1]
+    assert entry["evaluation"]["correct"] is False, "the evaluator's verdict is never rewritten"
+    assert entry["overridden"] is True, "the response must already reflect the override"
+
+    # And again on a fresh read, which is the path that resolves it from answer_overrides
+    # rather than from the object the override request happened to be holding.
+    reread = client.get(f"/api/study-session/{session['id']}").json()
+    assert reread["history"][-1]["overridden"] is True
+
+    assert all(
+        not e["overridden"] for e in reread["history"][:-1]
+    ), "only the disputed entry is flagged"
+
+
+def test_an_overridden_attempt_does_not_count_toward_the_attempt_cap(
+    evaluator_script: list[bool],
+) -> None:
+    """The point of the whole change: a grade the student overturned must not push the
+    concept toward being abandoned.
+
+    Three wrong answers on one concept trip `_MAX_CONCEPT_ATTEMPTS` and reveal the answer.
+    Here the first of the three is overridden, so only two failures count and the third
+    wrong answer must still be an ordinary wrong answer — no reveal, no advance.
+    """
+    doc_id = _upload_chapter()
+    # wrong, (override), wrong -> diagnose, correct probe -> return, wrong -> would be the
+    # third strike if the overridden one still counted.
+    evaluator_script.extend([False, False, True, False] + [True] * 10)
+    session = _start(doc_id)
+    concept = session["current_concept_id"]
+    question_id = f"{concept}:q1"
+
+    first = _answer(session["id"], question_id)
+    assert first["evaluation"]["correct"] is False
+    overridden = _override(session["id"], question_id)
+    assert overridden.status_code == 200
+    # The override advanced the session, so come back to the same concept deliberately
+    # rather than assuming where it landed.
+    store = get_store()
+    study_session = store.get_study_session(session["id"])
+    study_session.current_concept_id = concept
+    store.save_study_session(study_session)
+
+    second = _answer(session["id"], question_id)
+    assert second["revealed_answer"] is None
+
+    probe = second["study_session"]["history"][-1]["diagnosis"]["targeted_question"]["id"]
+    _answer(session["id"], probe)
+
+    third = _answer(session["id"], question_id)
+    assert third["revealed_answer"] is None, (
+        "only two answers actually count as failures, so the cap must not have tripped"
+    )

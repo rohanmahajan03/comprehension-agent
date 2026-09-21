@@ -39,6 +39,18 @@ Rewriting the entry would destroy the only in-session evidence of the disagreeme
 - **The overridden attempt still counts toward `_MAX_CONCEPT_ATTEMPTS`.** A student who overrides twice on one concept and then genuinely fails it once hits the cap. Correct under the remediation's own accounting (the cap bounds how much the *loop* spends on a concept), and rare enough not to warrant a second counter.
 - `completed_concepts` counts an overridden concept as passed, since it is the topological position of `current_concept_id` and the session did advance. That is the intended reading.
 
+### Amended 2026-09-20 — the first consequence was wrong
+
+**The first bullet no longer holds, and should not have.** Leaving the verdict intact is right; leaving *every reader* to see an overridden answer as a failure is not. The cap bounds what the loop spends on a concept, but an overridden answer did not cost the loop a failed attempt — it advanced the session exactly as a correct one would have. Counting it drove the concept toward being abandoned on the strength of a grade the student had already overturned, and the same reading leaked outward: the dependency graph painted it as an unrectified gap.
+
+The fix keeps §4's principle and adds the missing half. `evaluation` is still never rewritten; the disagreement now travels beside it as **`HistoryEntry.overridden`**, and the effective outcome is `evaluation.correct or overridden` (`HistoryEntry.effective_correct`, mirrored as `effectiveCorrect` in `frontend/src/lib/conceptProgress.ts`).
+
+No schema change was needed. `answer_overrides` already keys `(study_session_id, history_seq)`, and `history_seq` is the entry's index into `history`, so both stores resolve the flag on load — `InMemoryStore._mark_overridden` by dict lookup, `PostgresStore.get_study_session` by one query on the soft key (no join, since this table deliberately carries no foreign keys per §5). `override_answer` also sets it on the entry it just wrote, so the response reflects it without a re-read.
+
+Readers updated: `_failed_main_track_attempts` (the cap), and the client's graph colouring and attempt tally. The second bullet above is unaffected — it was already the intended reading, and `completed_concepts` still counts an overridden concept as passed.
+
+This is also the first thing to read `answer_overrides` back. §8 still holds for the *corpus* — nothing reviews the rows as misgrade data, and there is still no read endpoint — but the table is no longer write-only from the application's point of view.
+
 ## 5. A snapshot row with no foreign keys
 
 ```

@@ -1,3 +1,8 @@
+from app.models.question_ids import (
+    diagnostic_question_id,
+    has_pipeline_one_question,
+    is_diagnostic_question_id,
+)
 from app.models.schemas import (
     Answer,
     AnswerOverride,
@@ -23,11 +28,14 @@ __all__ = [
     "Concept",
     "DependencyGraph",
     "DiagnosisResult",
+    "diagnostic_question_id",
     "DocumentStatus",
     "DocumentSummary",
     "EvaluationResult",
     "EvidenceProposal",
+    "has_pipeline_one_question",
     "HistoryEntry",
+    "is_diagnostic_question_id",
     "Question",
     "StudySession",
     "StudySessionDetail",

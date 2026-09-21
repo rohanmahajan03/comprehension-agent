@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   getGraph,
   getStudySession,
@@ -6,14 +6,36 @@ import {
   startStudySession,
   submitAnswer,
 } from "../api/client";
+import {
+  DependencyGraphViz,
+  STATE_COLORS,
+  STATE_LABELS,
+} from "../components/DependencyGraphViz";
 import { QuestionCard } from "../components/QuestionCard";
+import {
+  LEGEND_ORDER,
+  conceptAttempts,
+  conceptStates,
+  type ConceptState,
+} from "../lib/conceptProgress";
+import { withoutUntestableConcepts } from "../lib/graphFilter";
 import type {
   AnswerResponse,
+  Concept,
   DependencyGraph,
   Question,
   StudySession,
   StudySessionDetail,
 } from "../types";
+
+/** Reuses the existing badge classes rather than minting new ones: "on track" is the
+ *  same green the status line already uses, and a gap is the amber of "diagnosing". */
+const STATE_BADGE: Record<ConceptState, string> = {
+  mastered: "badge correct",
+  current: "badge correct",
+  gap: "badge diagnosing",
+  unreached: "badge",
+};
 
 interface Props {
   docId: string;
@@ -32,6 +54,7 @@ export function StudySessionPage({ docId, sessionId, onExit }: Props) {
   // one-shot action on the result currently on screen, with nothing to restore on reload.
   const [overriding, setOverriding] = useState(false);
   const [overrideNote, setOverrideNote] = useState("");
+  const [selected, setSelected] = useState<Concept | null>(null);
   const [error, setError] = useState<string | null>(null);
   // Caches the in-flight `startStudySession` call per docId so React StrictMode's dev-mode
   // double-invoke of the mount effect below reuses the one POST instead of firing a second.
@@ -78,8 +101,35 @@ export function StudySessionPage({ docId, sessionId, onExit }: Props) {
     };
   }, [docId, sessionId]);
 
+  // Deliberately reads the *unfiltered* graph. A diagnosis can name a concept that had
+  // no pre-generated questions — the diagnoser mints one for its suspect on the spot — and
+  // that concept is absent from `visibleGraph` by design, so looking names up there would
+  // degrade the "Suspected deficiency" heading to a raw `{doc_id}:{slug}` id.
   const conceptName = (id: string | null | undefined) =>
     graph?.concepts.find((c) => c.id === id)?.name ?? id ?? "unknown";
+
+  // Concepts question_generator produced nothing for are dropped, with their prerequisite
+  // edges bridged. They can never be asked about on the main track, so every colour below
+  // would be a false claim about them — see the design doc's §4.
+  const visibleGraph = useMemo(
+    () => (graph ? withoutUntestableConcepts(graph) : null),
+    [graph],
+  );
+  const attemptSummary = (conceptId: string) => {
+    if (!studySession) return "";
+    const { asked, correct } = conceptAttempts(studySession, conceptId);
+    if (asked === 0) return "Not asked yet in this session.";
+    const times = asked === 1 ? "once" : `${asked} times`;
+    return `Asked ${times} this session · ${correct} answered correctly.`;
+  };
+
+  const states = useMemo(
+    () =>
+      visibleGraph && studySession
+        ? conceptStates(visibleGraph, studySession, question)
+        : null,
+    [visibleGraph, studySession, question],
+  );
 
   // The attempt the result card is about: the last entry of the history the answer
   // endpoint just returned. Derived rather than held in its own state so it cannot drift
@@ -160,7 +210,74 @@ export function StudySessionPage({ docId, sessionId, onExit }: Props) {
           <strong>{conceptName(studySession.current_concept_id)}</strong>
         </p>
         <button onClick={onExit}>Back to graph</button>
+        {/* The chapter's structure, coloured by what this session has shown. The page
+            already fetched this graph for `conceptName`; until now it was never drawn. */}
+        {visibleGraph && states && visibleGraph.concepts.length > 0 && (
+          <>
+            <DependencyGraphViz
+              graph={visibleGraph}
+              states={states}
+              selectedId={selected?.id}
+              onSelect={setSelected}
+            />
+            {/* Four colours with no key is a puzzle. Swatches read their colours from the
+                same table the nodes do, so the legend cannot drift from the graph. */}
+            <ul className="graph-legend">
+              {LEGEND_ORDER.map((state) => (
+                <li key={state}>
+                  <span
+                    className="graph-legend-swatch"
+                    style={{
+                      background: STATE_COLORS[state].fill,
+                      borderColor: STATE_COLORS[state].stroke,
+                    }}
+                  />
+                  {STATE_LABELS[state]}
+                </li>
+              ))}
+            </ul>
+            <p className="graph-hint">
+              <small>Click a concept for what this session has shown about it.</small>
+            </p>
+          </>
+        )}
       </div>
+
+      {selected && states && studySession && (
+        <div className="card concept-detail">
+          <h3>
+            {selected.name}{" "}
+            <span className={STATE_BADGE[states.get(selected.id) ?? "unreached"]}>
+              {STATE_LABELS[states.get(selected.id) ?? "unreached"]}
+            </span>
+          </h3>
+          {/* The concept currently being assessed keeps its summary covered. This is the
+              student's own chapter and looking a concept up is studying, but the summary
+              is the evidence anchor the open question was written from — showing it here
+              would hand over the answer to the question on screen, which is the same leak
+              `diagnoser` enforces at zero tolerance on its targeted questions. Keyed off
+              the pending question rather than `current_concept_id`: while diagnosing, the
+              concept being asked about is the probe's suspect, not the stalled one. */}
+          {question?.concept_id === selected.id ? (
+            <p className="concept-detail-hidden">
+              Summary hidden while this concept's question is open.
+            </p>
+          ) : (
+            <p>{selected.summary}</p>
+          )}
+          {selected.depends_on.length > 0 && (
+            <p>
+              <em>Depends on: {selected.depends_on.map(conceptName).join(", ")}</em>
+            </p>
+          )}
+          <p>
+            <small>{attemptSummary(selected.id)}</small>
+          </p>
+          <button className="session-cancel" onClick={() => setSelected(null)}>
+            Close
+          </button>
+        </div>
+      )}
 
       {lastResult && (
         <div className="card">

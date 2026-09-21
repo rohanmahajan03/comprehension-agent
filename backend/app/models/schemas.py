@@ -127,7 +127,9 @@ class AnswerOverride(BaseModel):
     A *second* record asserting the first is wrong, never an edit of it: the history entry
     this points at keeps `eval_correct = False` and the evaluator's explanation verbatim,
     since what the evaluator said is precisely the disputed artifact (design doc
-    docs/specs/2026-09-18-manual-answer-override-design.md §4).
+    docs/specs/2026-09-18-manual-answer-override-design.md §4). Readers see the
+    disagreement through `HistoryEntry.overridden`, which both stores derive from this
+    table on load — so nothing downstream has to treat an overridden answer as wrong.
 
     Self-contained on purpose. Every other table here references `questions` by FK rather
     than embedding a copy, but this row has to outlive what it describes:
@@ -164,10 +166,35 @@ class StudySessionStatus(str, Enum):
 
 
 class HistoryEntry(BaseModel):
+    """One answered question, as graded — plus whether the student successfully disputed it.
+
+    `evaluation` is always the evaluator's own verdict, never rewritten: what it said is
+    the disputed artifact, and editing it would make a session replay show agreement where
+    there was none (docs/specs/2026-09-18-manual-answer-override-design.md §4).
+
+    `overridden` carries the disagreement alongside it instead, so the two facts coexist:
+    what the grader concluded, and whether the student overruled it. **The effective
+    outcome is `evaluation.correct or overridden`** — that is what the attempt cap, the
+    graph colouring and every other reader must use, since an overridden answer advanced
+    the session exactly as a correct one would have.
+
+    Derived at read time from `answer_overrides`, not stored on `history_entries`: that
+    table already keys `(study_session_id, history_seq)` and `history_seq` is this entry's
+    index, so both stores can resolve it on load with no column and no migration.
+    """
+
     question: Question
     answer: Answer
     evaluation: EvaluationResult
     diagnosis: DiagnosisResult | None = None
+    overridden: bool = False
+
+    @property
+    def effective_correct(self) -> bool:
+        """Whether this attempt counts as right. A property, so it is not serialized —
+        clients get the two underlying facts and combine them the same way (see
+        `frontend/src/lib/conceptProgress.ts`)."""
+        return self.evaluation.correct or self.overridden
 
 
 class StudySession(BaseModel):

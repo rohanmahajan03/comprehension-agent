@@ -19,6 +19,7 @@ from app.models import (
     StudySession,
     StudySessionStatus,
     StudySessionSummaryRow,
+    has_pipeline_one_question,
 )
 
 
@@ -91,6 +92,14 @@ class Store(ABC):
         DRAFT documents are excluded for a related reason: a draft *does* have concepts
         (extraction already ran) but has no questions yet and can't host a study session,
         so listing it would offer the student a chapter that 409s the moment they start.
+
+        `total_concepts` counts only **testable** concepts — those with at least one
+        question written by pipeline 1. A concept `question_generator` returned nothing for
+        can never be asked about (`_advance` skips it) and is not drawn in the graph, so
+        counting it would make the denominator disagree with what the student can see. The
+        *gate* above still uses the raw count, deliberately: narrowing it too would make a
+        chapter whose every concept came back question-less vanish from the list rather
+        than appear with 0. See docs/specs/2026-09-20-graph-progress-coloring-design.md §4.
         """
         ...
 
@@ -152,6 +161,10 @@ class Store(ABC):
 
         Returns the internal row shape, without `completed_concepts` — see
         `StudySessionSummaryRow` for why that one field is the router's job.
+
+        `total_concepts` counts only testable concepts, matching `list_documents()`; the
+        router's `completed_concepts` applies the same filter so the two halves of the
+        fraction agree.
         """
         ...
 
@@ -246,21 +259,36 @@ class InMemoryStore(Store):
         ]:
             del self._study_sessions[session_id]
 
+    def _testable_concepts(self, graph: DependencyGraph) -> int:
+        """How many of this graph's concepts the student can actually be asked about.
+
+        Reads `self._questions` rather than `graph.concepts[].questions`, because a graph
+        held in `self._graphs` carries whatever questions it had when it was saved —
+        `get_graph()` is what reconstructs them from the index.
+        """
+        return sum(
+            1
+            for c in graph.concepts
+            if has_pipeline_one_question(q.id for q in self._questions.get(c.id, []))
+        )
+
     def list_documents(self) -> list[DocumentSummary]:
         rows = []
         for doc_id, text in self._documents.items():
             if self._status.get(doc_id) is not DocumentStatus.FINALIZED:
                 continue
             graph = self._graphs.get(doc_id)
-            total_concepts = len(graph.concepts) if graph is not None else 0
-            if total_concepts == 0:
+            # The raw count still gates visibility; only the reported number is narrowed
+            # to testable concepts. Gating on the narrowed one would silently drop a
+            # chapter whose every concept came back question-less.
+            if graph is None or not graph.concepts:
                 continue
             rows.append(
                 DocumentSummary(
                     id=doc_id,
                     title=self._titles.get(doc_id),
                     text_snippet=make_snippet(text),
-                    total_concepts=total_concepts,
+                    total_concepts=self._testable_concepts(graph),
                     created_at=self._created_at[doc_id],
                 )
             )
@@ -331,7 +359,21 @@ class InMemoryStore(Store):
         self._study_sessions[study_session.id] = study_session
 
     def get_study_session(self, study_session_id: str) -> StudySession | None:
-        return self._study_sessions.get(study_session_id)
+        study_session = self._study_sessions.get(study_session_id)
+        if study_session is not None:
+            self._mark_overridden(study_session)
+        return study_session
+
+    def _mark_overridden(self, study_session: StudySession) -> None:
+        """Set `HistoryEntry.overridden` from the override index.
+
+        Applied in place on the stored object rather than to a copy: the flag is derived
+        from durable state, so writing it back is idempotent, and InMemoryStore's callers
+        have always held a live reference to the session they read. PostgresStore resolves
+        the same thing with a query — see its `get_study_session`.
+        """
+        for seq, entry in enumerate(study_session.history):
+            entry.overridden = (study_session.id, seq) in self._answer_overrides
 
     def delete_study_session(self, study_session_id: str) -> None:
         self._study_sessions.pop(study_session_id, None)
@@ -347,7 +389,7 @@ class InMemoryStore(Store):
                 current_concept_id=s.current_concept_id,
                 # A session whose graph was never saved reports 0 rather than raising —
                 # PostgresStore's count subquery returns 0 for the same case.
-                total_concepts=len(graph.concepts)
+                total_concepts=self._testable_concepts(graph)
                 if (graph := self._graphs.get(s.doc_id)) is not None
                 else 0,
                 updated_at=s.updated_at,

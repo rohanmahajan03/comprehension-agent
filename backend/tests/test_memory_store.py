@@ -22,6 +22,15 @@ from app.models import (
 from app.store.memory_store import SNIPPET_CHARS, InMemoryStore, make_snippet
 
 
+def _question(concept_id: str, suffix: str) -> Question:
+    return Question(
+        id=f"{concept_id}:{suffix}",
+        concept_id=concept_id,
+        prompt="p",
+        expected_answer_notes="n",
+    )
+
+
 class TestMakeSnippet:
     """The label shown for a chapter uploaded without a title."""
 
@@ -148,6 +157,10 @@ class TestListUnfinishedSessions:
                 concepts=[Concept(id=f"d:c{i}", name=f"C{i}", summary="s") for i in range(concepts)],
             )
         )
+        # Concept counts report *testable* concepts, so a graph with no questions counts
+        # zero — see TestTestableConceptCounts below.
+        for i in range(concepts):
+            store.save_questions(f"d:c{i}", [_question(f"d:c{i}", "q1")])
         return store
 
     def test_excludes_completed_sessions(self) -> None:
@@ -200,6 +213,8 @@ class TestListDocuments:
     def _save(self, store: InMemoryStore, doc_id: str, concepts: int, title: str | None = "T") -> None:
         store.save_document(doc_id, f"Chapter text for {doc_id}.", title)
         if concepts:
+            for i in range(concepts):
+                store.save_questions(f"{doc_id}:c{i}", [_question(f"{doc_id}:c{i}", "q1")])
             store.save_graph(
                 DependencyGraph(
                     doc_id=doc_id,
@@ -400,3 +415,70 @@ class TestGetQuestions:
 
         assert store.get_questions("d:ghost") is None
         assert store.get_questions("other_doc:a") is None
+
+
+class TestTestableConceptCounts:
+    """`total_concepts` counts concepts the student can actually be asked about.
+
+    A concept `question_generator` returned nothing for is skipped by `_advance`, is not
+    drawn in the graph, and must not be counted — otherwise the denominator disagrees with
+    what the student can see (design doc
+    docs/specs/2026-09-20-graph-progress-coloring-design.md §4). The router applies the
+    same filter to `completed_concepts`, so both halves of the fraction agree.
+    """
+
+    def _store(self, *, questioned: list[str], unquestioned: list[str]) -> InMemoryStore:
+        store = InMemoryStore()
+        store.save_document("d", "A chapter.", "Chapter")
+        store.save_graph(
+            DependencyGraph(
+                doc_id="d",
+                concepts=[
+                    Concept(id=cid, name=cid, summary="s")
+                    for cid in questioned + unquestioned
+                ],
+            )
+        )
+        for cid in questioned:
+            store.save_questions(cid, [_question(cid, "q1")])
+        return store
+
+    def test_question_less_concepts_are_not_counted(self) -> None:
+        store = self._store(questioned=["d:a", "d:b"], unquestioned=["d:thin"])
+
+        assert store.list_documents()[0].total_concepts == 2
+
+    def test_a_concept_holding_only_a_diagnostic_question_is_not_counted(self) -> None:
+        """The reason the predicate reads the id rather than just `questions != []`.
+
+        Both stores rebuild `Concept.questions` from the question index on every
+        `get_graph()`, so a concept the diagnoser probed mid-session would otherwise
+        become testable, reappear in the graph, and bump the denominator partway through
+        a session.
+        """
+        store = self._store(questioned=["d:a"], unquestioned=["d:thin"])
+        store.save_questions("d:thin", [_question("d:thin", "diagnostic1")])
+
+        assert store.list_documents()[0].total_concepts == 1
+
+    def test_a_concept_whose_slug_starts_with_diagnostic_is_still_counted(self) -> None:
+        """`d:diagnostic-tools:q1` is a pipeline-1 question, not a probe — the case a
+        substring test on ":diagnostic" gets wrong."""
+        store = self._store(questioned=["d:diagnostic-tools"], unquestioned=[])
+
+        assert store.list_documents()[0].total_concepts == 1
+
+    def test_the_session_list_uses_the_same_count(self) -> None:
+        store = self._store(questioned=["d:a", "d:b"], unquestioned=["d:thin"])
+        store.save_study_session(StudySession(id="s", doc_id="d", current_concept_id="d:a"))
+
+        assert store.list_unfinished_sessions()[0].total_concepts == 2
+
+    def test_a_chapter_with_no_testable_concept_is_still_listed(self) -> None:
+        """The visibility gate deliberately stays on the raw concept count: a chapter whose
+        every concept came back question-less should appear with 0, not vanish."""
+        store = self._store(questioned=[], unquestioned=["d:thin"])
+
+        rows = store.list_documents()
+        assert len(rows) == 1
+        assert rows[0].total_concepts == 0

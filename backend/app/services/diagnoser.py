@@ -23,6 +23,7 @@ from app.models import (
     EvaluationResult,
     Question,
 )
+from app.models.question_ids import diagnostic_id_prefix, diagnostic_question_id
 # Diagnostic questions are graded by the same evaluator as pipeline-1 questions, so they
 # must render their model answer into expected_answer_notes identically.
 from app.services.question_generator import format_answer_notes
@@ -714,10 +715,14 @@ def _next_diagnostic_id(suspect: Concept) -> str:
     Numbered rather than a bare `:diagnostic` suffix because a concept can be diagnosed more than
     once in a session with a different gap each time; a fixed suffix would collide, and the
     router dedupes by id — it would silently keep serving the first question's rubric.
+
+    The id is spelled by `app.models.question_ids`, which is also where the read side lives:
+    counting a chapter's testable concepts has to tell a pipeline-1 question from a probe,
+    and that reader cannot go through this function.
     """
-    prefix = f"{suspect.id}:diagnostic"
+    prefix = diagnostic_id_prefix(suspect.id)
     taken = sum(1 for q in suspect.questions if q.id.startswith(prefix))
-    return f"{prefix}{taken + 1}"
+    return diagnostic_question_id(suspect.id, taken + 1)
 
 
 _OUTSIDE_GRAPH_NOTICE = (

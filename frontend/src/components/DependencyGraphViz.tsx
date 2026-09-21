@@ -1,9 +1,36 @@
+import type { ConceptState } from '../lib/conceptProgress'
 import type { Concept, DependencyGraph } from '../types'
 
 interface Props {
   graph: DependencyGraph
   selectedId?: string | null
   onSelect?: (concept: Concept) => void
+  /**
+   * Per-concept progress colouring. Omit it and every node renders exactly as before,
+   * which is what keeps GraphView and ReviewGraphPage untouched by this.
+   *
+   * Only the colouring lives here. Which concepts are *drawn* is decided by the caller
+   * filtering the graph it passes (see lib/graphFilter), so this component never needs to
+   * know what a question is.
+   */
+  states?: ReadonlyMap<string, ConceptState>
+}
+
+/** Reuses the app's existing badge palette: the 'correct' green, the 'diagnosing' amber,
+ *  and the selected-node indigo the review screen already uses. `unreached` is the plain
+ *  node, so a graph rendered without `states` is pixel-identical to before. */
+export const STATE_COLORS: Record<ConceptState, { fill: string; stroke: string }> = {
+  mastered: { fill: '#d9f2dd', stroke: '#5aa86e' },
+  gap: { fill: '#fff0cc', stroke: '#d9a441' },
+  current: { fill: '#eef0fd', stroke: '#4b5bd7' },
+  unreached: { fill: 'white', stroke: '#b8bede' },
+}
+
+export const STATE_LABELS: Record<ConceptState, string> = {
+  mastered: 'answered correctly',
+  gap: 'gap — not yet rectified',
+  current: 'current concept',
+  unreached: 'not reached yet',
 }
 
 interface NodeLayout {
@@ -117,7 +144,7 @@ function layout(graph: DependencyGraph): Map<string, NodeLayout> {
   return positions
 }
 
-export function DependencyGraphViz({ graph, selectedId, onSelect }: Props) {
+export function DependencyGraphViz({ graph, selectedId, onSelect, states }: Props) {
   const positions = layout(graph)
   // Trailing `0` keeps Math.max from returning -Infinity when the graph is empty.
   const width =
@@ -157,6 +184,18 @@ export function DependencyGraphViz({ graph, selectedId, onSelect }: Props) {
         const pos = positions.get(concept.id)
         if (!pos) return null
         const selected = concept.id === selectedId
+        // Selection and progress are independent and can coexist on the same node, so
+        // they use different channels: progress owns the fill, selection owns the outline.
+        // Letting selection recolour the fill would hide the very thing the node is
+        // coloured for the moment you clicked it.
+        //
+        // Without `states` there is no progress to preserve, so selection falls back to
+        // the 'current' swatch — which *is* the indigo a selected node has always used,
+        // leaving GraphView and ReviewGraphPage pixel-identical to before.
+        const state: ConceptState =
+          states?.get(concept.id) ?? (selected ? 'current' : 'unreached')
+        const { fill } = STATE_COLORS[state]
+        const stroke = selected ? STATE_COLORS.current.stroke : STATE_COLORS[state].stroke
         const textBlockHeight = pos.lines.length * LINE_HEIGHT
         const firstLineY = (pos.height - textBlockHeight) / 2 + LINE_HEIGHT / 2
         return (
@@ -166,12 +205,15 @@ export function DependencyGraphViz({ graph, selectedId, onSelect }: Props) {
             onClick={() => onSelect?.(concept)}
             style={{ cursor: onSelect ? 'pointer' : 'default' }}
           >
+            {/* Colour alone can't carry the state, so every coloured node says it on hover
+                too. Omitted when uncoloured — there'd be nothing to add. */}
+            {states && <title>{`${concept.name} — ${STATE_LABELS[state]}`}</title>}
             <rect
               width={pos.width}
               height={pos.height}
               rx={10}
-              fill={selected ? '#eef0fd' : 'white'}
-              stroke={selected ? '#4b5bd7' : '#b8bede'}
+              fill={fill}
+              stroke={stroke}
               strokeWidth={selected ? 2 : 1.5}
             />
             <text

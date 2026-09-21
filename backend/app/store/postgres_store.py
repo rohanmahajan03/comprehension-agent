@@ -12,7 +12,7 @@ design's §3, a graph write must never touch questions; only `save_questions` do
 
 from datetime import UTC, datetime
 
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import delete, exists, func, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import selectinload
 
@@ -25,6 +25,7 @@ from app.db.models import (
     QuestionRow,
     StudySessionRow,
 )
+from app.models.question_ids import DIAGNOSTIC_ID_PATTERN
 from app.models import (
     Answer,
     AnswerOverride,
@@ -61,6 +62,32 @@ def _to_concept(row: ConceptRow) -> Concept:
         depends_on=list(row.depends_on),
         evidence=dict(row.evidence),
         questions=[_to_question(q) for q in row.questions],
+    )
+
+
+
+def _testable_concept_count(parent_id):
+    """COUNT of `parent_id`'s concepts that have at least one pipeline-1 question.
+
+    The Postgres half of `has_pipeline_one_question`. The predicate cannot be a Python
+    call here, so `DIAGNOSTIC_ID_PATTERN` is handed to Postgres' own regex operator (`~`)
+    — the pattern is shared with the Python side precisely so the two cannot drift, and it
+    is anchored (`:diagnostic[0-9]+$`) rather than a `LIKE '%diagnostic%'`, which would
+    misclassify every pipeline-1 question on a concept whose slug starts with the word.
+    """
+    return (
+        select(func.count(ConceptRow.id))
+        .where(
+            ConceptRow.doc_id == parent_id,
+            exists(
+                select(1).where(
+                    QuestionRow.concept_id == ConceptRow.id,
+                    ~QuestionRow.id.op("~")(DIAGNOSTIC_ID_PATTERN),
+                )
+            ),
+        )
+        .correlate_except(ConceptRow, QuestionRow)
+        .scalar_subquery()
     )
 
 
@@ -117,27 +144,31 @@ class PostgresStore(Store):
         """Finalized documents with at least one concept, most recently created first —
         see the Store ABC docstring for why zero-concept and draft documents are excluded.
 
-        The concept-count subquery is reused in both the select list and the WHERE
-        clause (SQLAlchemy correlates each occurrence independently), rather than
-        filtering in Python — cheaper than loading every document to check.
+        Two counts, not one: the WHERE clause gates on whether the document has any
+        concepts at all, while the reported `total_concepts` counts only testable ones.
+        Both are correlated subqueries rather than Python-side filtering — cheaper than
+        loading every document to check.
         """
-        total_concepts = (
+        any_concepts = (
             select(func.count(ConceptRow.id))
             .where(ConceptRow.doc_id == DocumentRow.id)
             .correlate(DocumentRow)
             .scalar_subquery()
         )
+        testable_concepts = _testable_concept_count(DocumentRow.id)
         with session_scope() as session:
             rows = session.execute(
                 select(
                     DocumentRow.id,
                     DocumentRow.title,
                     func.left(DocumentRow.text, SNIPPET_CHARS * 2).label("text_head"),
-                    total_concepts.label("total_concepts"),
+                    testable_concepts.label("total_concepts"),
                     DocumentRow.created_at,
                 )
                 .where(
-                    total_concepts > 0,
+                    # The raw count gates; only the reported number is narrowed to
+                    # testable concepts (see the Store ABC docstring for why).
+                    any_concepts > 0,
                     DocumentRow.status == DocumentStatus.FINALIZED.value,
                 )
                 .order_by(DocumentRow.created_at.desc())
@@ -317,8 +348,20 @@ class PostgresStore(Store):
             if row is None:
                 return None
 
+            # Which entries the student successfully disputed. One query rather than a
+            # join onto history_entries: answer_overrides deliberately carries no foreign
+            # keys (it has to outlive both cascade chains), so it is matched on the soft
+            # `(study_session_id, history_seq)` key instead.
+            overridden_seqs = set(
+                session.scalars(
+                    select(AnswerOverrideRow.history_seq).where(
+                        AnswerOverrideRow.study_session_id == study_session_id
+                    )
+                ).all()
+            )
+
             history = []
-            for h in row.history:  # relationship declares order_by=HistoryEntryRow.seq
+            for seq, h in enumerate(row.history):  # relationship order_by=HistoryEntryRow.seq
                 diagnosis = None
                 if h.diagnosis_suspected_concept_id is not None:
                     diagnosis = DiagnosisResult(
@@ -334,6 +377,7 @@ class PostgresStore(Store):
                             correct=h.eval_correct, explanation=h.eval_explanation
                         ),
                         diagnosis=diagnosis,
+                        overridden=seq in overridden_seqs,
                     )
                 )
 
@@ -359,15 +403,12 @@ class PostgresStore(Store):
 
         The concept count is a correlated subquery rather than a GROUP BY join so that a
         document with no concepts yields 0 instead of dropping the session from the result.
+        It counts testable concepts only, matching `list_documents()` and the router's
+        `completed_concepts`.
         `history_entries` is intentionally not counted — progress is the topological
         position of `current_concept_id`, computed by the router, not an answer tally.
         """
-        total_concepts = (
-            select(func.count(ConceptRow.id))
-            .where(ConceptRow.doc_id == StudySessionRow.doc_id)
-            .correlate(StudySessionRow)
-            .scalar_subquery()
-        )
+        total_concepts = _testable_concept_count(StudySessionRow.doc_id)
         with session_scope() as session:
             rows = session.execute(
                 select(

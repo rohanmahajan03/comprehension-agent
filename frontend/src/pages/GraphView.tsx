@@ -1,8 +1,20 @@
 import { useEffect, useState } from 'react'
-import { getGraph, getQuestions, listStudySessions } from '../api/client'
-import { DependencyGraphViz } from '../components/DependencyGraphViz'
+import { getGraph, getQuestions, getStudySession, listStudySessions } from '../api/client'
+import {
+  DependencyGraphViz,
+  STATE_COLORS,
+  STATE_LABELS,
+} from '../components/DependencyGraphViz'
+import { LEGEND_ORDER, conceptStates } from '../lib/conceptProgress'
+import { withoutUntestableConcepts } from '../lib/graphFilter'
 import { relativeTime } from '../components/SessionList'
-import type { Concept, DependencyGraph, Question, StudySessionSummary } from '../types'
+import type {
+  Concept,
+  DependencyGraph,
+  Question,
+  StudySessionDetail,
+  StudySessionSummary,
+} from '../types'
 
 interface Props {
   docId: string
@@ -16,6 +28,9 @@ export function GraphView({ docId, onStartStudySession, onResumeStudySession }: 
   const [questions, setQuestions] = useState<Question[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [resumable, setResumable] = useState<StudySessionSummary | null>(null)
+  // The resumable session's full history, purely so this graph can carry the same
+  // colouring the study screen does — the summary row has counts but no history.
+  const [resumableDetail, setResumableDetail] = useState<StudySessionDetail | null>(null)
 
   useEffect(() => {
     getGraph(docId).then(setGraph).catch((err) => setError(String(err)))
@@ -39,6 +54,22 @@ export function GraphView({ docId, onStartStudySession, onResumeStudySession }: 
   }, [docId])
 
   useEffect(() => {
+    let cancelled = false
+    setResumableDetail(null)
+    if (!resumable) return
+    // Same reasoning as the listStudySessions call above: a failure here costs only the
+    // colouring, so it stays off the page-level error path.
+    getStudySession(resumable.id)
+      .then((detail) => {
+        if (!cancelled) setResumableDetail(detail)
+      })
+      .catch(() => undefined)
+    return () => {
+      cancelled = true
+    }
+  }, [resumable])
+
+  useEffect(() => {
     // Clear before fetching so switching concepts shows "Loading…" instead of
     // briefly flashing the previously-selected concept's questions.
     setQuestions(null)
@@ -51,6 +82,21 @@ export function GraphView({ docId, onStartStudySession, onResumeStudySession }: 
   if (error) return <p className="error">{error}</p>
   if (!graph) return <p>Loading graph…</p>
 
+  // Same filter the study session applies. This page invites you to "click a concept to
+  // preview its generated questions", and a concept question_generator produced nothing
+  // for is an empty list presented as a result. Selection and the "Depends on" line read
+  // from the filtered graph too, so nothing here names a concept that isn't on screen.
+  const visibleGraph = withoutUntestableConcepts(graph)
+
+  // The same colouring the study screen shows, so the graph is one thing across both
+  // pages rather than a coloured version and a clickable version. Undefined when there is
+  // no session to colour from, which renders exactly as it always has. Overrides need no
+  // special handling here: `HistoryEntry.overridden` comes down with the session, so a
+  // disputed grade reads as mastered on this screen exactly as it does on the other.
+  const states = resumableDetail
+    ? conceptStates(visibleGraph, resumableDetail, resumableDetail.pending_question)
+    : undefined
+
   return (
     <div>
       <div className="card">
@@ -59,7 +105,28 @@ export function GraphView({ docId, onStartStudySession, onResumeStudySession }: 
           Arrows point from prerequisite to dependent concept. Click a concept to preview
           its generated questions, or start a tutoring session.
         </p>
-        <DependencyGraphViz graph={graph} selectedId={selected?.id} onSelect={setSelected} />
+        <DependencyGraphViz
+          graph={visibleGraph}
+          states={states}
+          selectedId={selected?.id}
+          onSelect={setSelected}
+        />
+        {states && (
+          <ul className="graph-legend">
+            {LEGEND_ORDER.map((state) => (
+              <li key={state}>
+                <span
+                  className="graph-legend-swatch"
+                  style={{
+                    background: STATE_COLORS[state].fill,
+                    borderColor: STATE_COLORS[state].stroke,
+                  }}
+                />
+                {STATE_LABELS[state]}
+              </li>
+            ))}
+          </ul>
+        )}
         {/* Both actions are offered explicitly when there's something to resume. Silently
             resuming would remove any way to restudy a chapter from scratch; always
             starting fresh is what produced duplicate sessions in the first place. */}
@@ -88,7 +155,7 @@ export function GraphView({ docId, onStartStudySession, onResumeStudySession }: 
               <em>
                 Depends on:{' '}
                 {selected.depends_on
-                  .map((id) => graph.concepts.find((c) => c.id === id)?.name ?? id)
+                  .map((id) => visibleGraph.concepts.find((c) => c.id === id)?.name ?? id)
                   .join(', ')}
               </em>
             </p>
