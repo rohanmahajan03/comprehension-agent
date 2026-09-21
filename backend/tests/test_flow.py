@@ -181,19 +181,39 @@ def _answer(session_id: str, question_id: str, text: str = "my answer") -> dict:
     return response.json()
 
 
-def _answer_until_reveal(session: dict) -> tuple[dict, dict]:
+def _answer_until_reveal(session: dict, start_from: dict | None = None) -> tuple[dict, dict]:
     """Follow the loop — answering whatever it serves next — until one of the caps trips.
 
     The caller scripts the evaluator; this just walks the path a client would. Returns
     (the question that was abandoned, the response that revealed its answer).
+
+    `start_from` overrides the session's opening question, for callers that have already
+    walked it forward onto a concept with prerequisites.
     """
-    served = session["pending_question"]
+    served = start_from or session["pending_question"]
     body = _answer(session["id"], served["id"])
     while body["revealed_answer"] is None:
         assert body["next_question"] is not None, "the loop stalled with no question to serve"
         served = body["next_question"]
         body = _answer(session["id"], served["id"])
     return served, body
+
+
+def _advance_to_a_dependent_concept(started: dict) -> tuple[str, dict]:
+    """Answer the chapter's root concept correctly and return `(concept_id, question)` for
+    the next one, which has a prerequisite.
+
+    Necessary for any test about the *prerequisite* branch. `stub_diagnoser` names a
+    concept's first `depends_on` entry and falls back to the concept itself, so a session
+    sitting on the topologically-first concept can only ever self-diagnose — and a test
+    written there silently exercises the self-diagnosis branch instead of the one its name
+    claims. Four tests here did exactly that until the two branches were separated.
+
+    Costs one scripted `True` at the front of `evaluator_script`.
+    """
+    body = _answer(started["id"], started["pending_question"]["id"])
+    assert body["evaluation"]["correct"], "the first scripted grade must pass to move off the root"
+    return body["study_session"]["current_concept_id"], body["next_question"]
 
 
 def test_correct_diagnostic_returns_to_the_concept_that_failed(
@@ -206,14 +226,17 @@ def test_correct_diagnostic_returns_to_the_concept_that_failed(
     so passing the diagnostic on prerequisite P marked concept X done without the student
     ever demonstrating X — and inflated `completed_concepts` on the menu screen with it.
     """
-    evaluator_script.extend([False, True])  # fail the concept, then pass its diagnostic
+    # pass the root concept, fail the next one, then pass its prerequisite probe
+    evaluator_script.extend([True, False, True])
     doc_id = _upload_chapter()
     started = _start(doc_id)
-    concept_id = started["current_concept_id"]
-    question = started["pending_question"]
+    concept_id, question = _advance_to_a_dependent_concept(started)
 
     wrong = _answer(started["id"], question["id"])
     assert wrong["study_session"]["status"] == "diagnosing"
+    assert wrong["diagnosis"]["suspected_gap_concept_id"] != concept_id, (
+        "this test is about the prerequisite branch, so the suspect must be another concept"
+    )
 
     body = _answer(started["id"], wrong["diagnosis"]["targeted_question"]["id"])
     study_session = body["study_session"]
@@ -229,23 +252,63 @@ def test_correct_diagnostic_returns_to_the_concept_that_failed(
     assert body["revealed_answer"] is None
 
 
+def test_correct_self_diagnostic_advances_instead_of_re_serving_the_concept(
+    evaluator_script: list[bool],
+) -> None:
+    """The other side of §2's return rule: it only applies to a *prerequisite* probe.
+
+    `stub_diagnoser` falls back to the answered concept when it has no `depends_on`, and
+    the real diagnoser self-diagnoses too (CLAUDE.md records `hash_index` doing exactly
+    that). The probe is then a question *about this concept*, so answering it correctly
+    demonstrates the concept — there is nothing to hand back.
+
+    Reading "was a diagnostic" as "do not advance" made this a treadmill: the loop returned
+    to the same concept and `_pending_question` re-served the question that started it, so
+    a correct answer moved nothing. Bounded only by `_MAX_CONCEPT_ATTEMPTS`, and invisible
+    because every test covering the return step started on the root concept.
+    """
+    evaluator_script.extend([False, True, True])  # fail the root, then pass its own probe
+    doc_id = _upload_chapter()
+    started = _start(doc_id)
+    concept_id = started["current_concept_id"]
+    question = started["pending_question"]
+
+    wrong = _answer(started["id"], question["id"])
+    probe = wrong["diagnosis"]["targeted_question"]
+    assert wrong["diagnosis"]["suspected_gap_concept_id"] == concept_id, (
+        "a root concept has no prerequisites, so the diagnoser can only name itself"
+    )
+
+    body = _answer(started["id"], probe["id"])
+
+    assert body["study_session"]["current_concept_id"] == f"{doc_id}:continuity", (
+        "the probe was about this concept, so passing it advances rather than returning"
+    )
+    assert body["study_session"]["status"] == "active"
+    assert body["next_question"]["id"] != question["id"], (
+        "re-serving the question that started the drill is the treadmill this prevents"
+    )
+
+
 def test_concept_is_left_behind_only_once_answered_correctly(
     evaluator_script: list[bool],
 ) -> None:
     """The other half of §2's rule: the retry is what advances, and nothing before it."""
-    evaluator_script.extend([False, True, True])  # fail X, pass the diagnostic, pass X
+    # pass the root, fail X, pass X's prerequisite probe, pass X
+    evaluator_script.extend([True, False, True, True])
     doc_id = _upload_chapter()
     started = _start(doc_id)
-    question = started["pending_question"]
+    concept_id, question = _advance_to_a_dependent_concept(started)
+    assert concept_id == f"{doc_id}:continuity"
 
     diagnostic = _answer(started["id"], question["id"])["diagnosis"]["targeted_question"]
     returned = _answer(started["id"], diagnostic["id"])["study_session"]
-    assert returned["current_concept_id"] == f"{doc_id}:limits"
+    assert returned["current_concept_id"] == concept_id
 
     body = _answer(started["id"], question["id"])
     # The stub graph's topological order is limits, continuity, derivatives, chain-rule,
     # implicit-differentiation.
-    assert body["study_session"]["current_concept_id"] == f"{doc_id}:continuity"
+    assert body["study_session"]["current_concept_id"] == f"{doc_id}:derivatives"
     assert body["study_session"]["status"] == "active"
 
 
@@ -257,16 +320,22 @@ def test_attempt_cap_reveals_the_answer_and_moves_on(evaluator_script: list[bool
     diagnosis: the loop gives up instead, which is what makes the ceiling A + (A-1) × C
     rather than A × (1 + C).
     """
-    evaluator_script.extend([False, True] * (_MAX_CONCEPT_ATTEMPTS - 1) + [False])
+    # The leading True moves off the root concept: a passed probe only *returns* when the
+    # probe was on another concept, so accumulating attempts on one question requires a
+    # concept that actually has a prerequisite (see `_advance_to_a_dependent_concept`).
+    evaluator_script.extend(
+        [True] + [False, True] * (_MAX_CONCEPT_ATTEMPTS - 1) + [False]
+    )
     doc_id = _upload_chapter()
     started = _start(doc_id)
+    _, question = _advance_to_a_dependent_concept(started)
 
-    abandoned, body = _answer_until_reveal(started)
-    assert abandoned["id"] == started["pending_question"]["id"]
+    abandoned, body = _answer_until_reveal(started, question)
+    assert abandoned["id"] == question["id"]
     assert body["revealed_answer"] == abandoned["expected_answer_notes"]
     assert body["diagnosis"] is None, "the capped attempt gives up instead of drilling again"
     assert body["study_session"]["status"] == "active"
-    assert body["study_session"]["current_concept_id"] == f"{doc_id}:continuity", (
+    assert body["study_session"]["current_concept_id"] == f"{doc_id}:derivatives", (
         "a capped concept is left unmastered, deliberately, rather than parked on"
     )
 
@@ -314,13 +383,16 @@ def test_reveal_and_next_question_arrive_in_one_response(
     the student is never left with an answer and nothing to do — and the next question is
     the same one the resume path would serve.
     """
-    evaluator_script.extend([False, True] * (_MAX_CONCEPT_ATTEMPTS - 1) + [False])
+    evaluator_script.extend(
+        [True] + [False, True] * (_MAX_CONCEPT_ATTEMPTS - 1) + [False]
+    )
     doc_id = _upload_chapter()
     started = _start(doc_id)
+    _, question = _advance_to_a_dependent_concept(started)
 
-    _, body = _answer_until_reveal(started)
+    _, body = _answer_until_reveal(started, question)
     assert body["revealed_answer"]
-    assert body["next_question"]["id"] == f"{doc_id}:continuity:q1"
+    assert body["next_question"]["id"] == f"{doc_id}:derivatives:q1"
 
     resumed = client.get(f"/api/study-session/{started['id']}").json()
     assert resumed["pending_question"]["id"] == body["next_question"]["id"]

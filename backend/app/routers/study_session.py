@@ -380,19 +380,28 @@ def override_answer(
     # status. By the time an override arrives the status already reflects what the wrong
     # answer did: a failed main-track answer leaves the session DIAGNOSING, so reading the
     # status here would misread it as a prerequisite probe and refuse to advance.
-    was_diagnostic = entry.question.id in _diagnostic_question_ids(study_session)
-    # True only when a cap already carried the session past this concept (`_advance` ran and
-    # the answer was revealed), in which case there is nothing left to advance.
-    already_moved_on = entry.question.concept_id != study_session.current_concept_id
+    # Whether this answer was about some *other* concept than the one the session is parked
+    # on. That single fact decides the transition, and it covers all three non-advancing
+    # shapes: a prerequisite probe (the suspect is a different concept), and a cap or an
+    # earlier override having already carried the loop past this concept.
+    #
+    # It deliberately does **not** consult `_diagnostic_question_ids`. An earlier version
+    # read "was this a diagnostic?" as "do not advance", which is wrong whenever the
+    # diagnoser names the answered concept as its own suspect — a documented outcome, and
+    # the default for a concept with no prerequisites (`stub_diagnoser` reproduces it). In
+    # that case "hand the concept back so it can be demonstrated" hands back the concept
+    # just demonstrated, and `_pending_question` re-serves the very question at issue, so
+    # the session never moves. Comparing concepts instead makes self-diagnosis advance and
+    # leaves every other shape exactly as it was.
+    answered_another_concept = entry.question.concept_id != study_session.current_concept_id
 
     if study_session.status is StudySessionStatus.COMPLETED:
         # The session finished on this answer. Recording the disagreement is the whole point
         # here; resurrecting a completed session to re-serve a concept is not.
         pass
-    elif was_diagnostic or already_moved_on:
-        # The concept this answer belongs to isn't waiting on it — the student disputed a
-        # prerequisite probe, or a cap already moved the loop on. Either way: stop drilling,
-        # leave `current_concept_id` alone, and let the student take that concept again.
+    elif answered_another_concept:
+        # Stop drilling, leave `current_concept_id` alone, and let the student take that
+        # concept again.
         study_session.status = StudySessionStatus.ACTIVE
     else:
         _advance(store, study_session, graph)
@@ -428,7 +437,10 @@ def submit_answer(study_session_id: str, answer: Answer) -> AnswerResponse:
     revealed_answer: str | None = None
 
     if evaluation.correct:
-        if entry_status is StudySessionStatus.DIAGNOSING:
+        if (
+            entry_status is StudySessionStatus.DIAGNOSING
+            and question.concept_id != study_session.current_concept_id
+        ):
             # The prerequisite gap is closed, so hand the student back the concept that
             # exposed it — deliberately *without* advancing. This is the return step the loop
             # was missing: the old code advanced unconditionally here, so repairing a
@@ -436,6 +448,13 @@ def submit_answer(study_session_id: str, answer: Answer) -> AnswerResponse:
             # Re-serving needs nothing else — an ACTIVE session on this concept already gets
             # `store.get_questions(...)[0]`, and diagnostic questions are appended after the
             # generated set, so index 0 is still the main-track question.
+            #
+            # The concept check is what keeps that from becoming a treadmill. When the
+            # diagnoser names the answered concept as its own suspect — self-diagnosis, the
+            # only possible outcome for a concept with no prerequisites — the probe *is* a
+            # question about this concept, so answering it correctly demonstrates the
+            # concept and there is nothing to hand back. Without the check the loop returned
+            # to the same concept and re-served the question that started it.
             study_session.status = StudySessionStatus.ACTIVE
         else:
             _advance(store, study_session, graph)

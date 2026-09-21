@@ -390,3 +390,37 @@ def test_an_overridden_attempt_does_not_count_toward_the_attempt_cap(
     assert third["revealed_answer"] is None, (
         "only two answers actually count as failures, so the cap must not have tripped"
     )
+
+
+def test_override_of_a_self_diagnostic_advances_instead_of_re_serving(
+    evaluator_script: list[bool],
+) -> None:
+    """The reported bug: override a probe the diagnoser aimed at the concept itself, and
+    the session handed back that same concept and re-served the question that started it.
+
+    Same root cause as `test_correct_self_diagnostic_advances_instead_of_re_serving_the_concept`
+    in test_flow.py — the transition read "was a diagnostic" as "do not advance" — but
+    worse here, because the student has just asserted they answered correctly and the loop
+    responds by asking them again. The concept also stayed `current`, so the dependency
+    graph painted it blue rather than green.
+    """
+    doc_id = _upload_chapter()
+    evaluator_script.extend([False, False] + [True] * 10)
+    session = _start(doc_id)
+    root = session["current_concept_id"]
+
+    wrong = _answer(session["id"], session["pending_question"]["id"])
+    probe = wrong["diagnosis"]["targeted_question"]
+    assert wrong["diagnosis"]["suspected_gap_concept_id"] == root, (
+        "a root concept has no prerequisites, so this is the self-diagnosis shape"
+    )
+    _answer(session["id"], probe["id"])  # fail the probe too, so it can be disputed
+
+    detail = _override(session["id"], probe["id"]).json()
+
+    assert detail["current_concept_id"] != root, "the overridden concept must be left behind"
+    assert detail["pending_question"]["id"] != probe["id"]
+    assert detail["pending_question"]["id"] != f"{root}:q1", (
+        "re-serving the question that started the drill is exactly what was reported"
+    )
+    assert detail["history"][-1]["overridden"] is True

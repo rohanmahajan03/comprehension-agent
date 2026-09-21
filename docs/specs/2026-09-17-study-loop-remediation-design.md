@@ -47,6 +47,23 @@ Returning to X requires no change to `_pending_question`. An `ACTIVE` session on
 
 No new `StudySessionStatus` member. `ACTIVE`/`DIAGNOSING`/`COMPLETED` already express every state above, so nothing changes in the Postgres `study_sessions.status` column, the TypeScript union, or the badge rendering.
 
+### Amended 2026-09-21 — status alone is not the discriminator
+
+**"Nothing needs to inspect the question's id or provenance" was too strong**, and the `DIAGNOSING`+correct row above is wrong as written. It assumes the probe was aimed at a *prerequisite*. The diagnoser is free to name the answered concept as its own suspect — self-diagnosis is a documented outcome (CLAUDE.md records `hash_index` doing it), and it is the *only* possible outcome for a concept with no prerequisites, since there is nowhere else to point.
+
+When that happens the probe is a question **about this concept**, so answering it correctly demonstrates the concept and there is nothing to hand back. The rule as built returned to X and `_pending_question` re-served `get_questions(X)[0]` — the question that started the drill — so a correct answer advanced nothing. A treadmill bounded only by `_MAX_CONCEPT_ATTEMPTS`, and strictly worse through the override endpoint, where the student has just asserted they answered correctly and the loop responds by asking them the same question again. That is how it was found.
+
+The corrected row:
+
+| entry status | evaluation | result |
+| --- | --- | --- |
+| `DIAGNOSING` | correct, probe on **another** concept | → `ACTIVE`, current concept unchanged — X is re-served |
+| `DIAGNOSING` | correct, probe on **this** concept | advance — the probe *was* the demonstration |
+
+So the discriminator is status **plus** whether the answered question belongs to the concept the session is parked on. That is a concept-id comparison, not id-parsing or provenance — `_diagnostic_question_ids` is no longer consulted on this path at all. In `override_answer` the same comparison subsumes the old `was_diagnostic or already_moved_on` pair outright: a prerequisite probe, a cap that already advanced, and an earlier override are all "this answer was about a concept we are not parked on".
+
+**Why no test caught it:** every test exercising the return step started the session on the chapter's first concept, which by definition has no prerequisites, so all of them were running the self-diagnosis path while asserting prerequisite behaviour — including `test_correct_diagnostic_returns_to_the_concept_that_failed`, named for the rule it was not testing. They now advance to a dependent concept first (`_advance_to_a_dependent_concept`), and both branches have their own test.
+
 ## 3. Two bounds, because one cannot close both doors
 
 ```python
