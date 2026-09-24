@@ -71,7 +71,7 @@ export default function App() {
         <StudySessionPage
           docId={docId}
           sessionId={resumeSessionId ?? undefined}
-          onExit={() => setPage('graph')}
+          onExit={() => setPage('menu')}
         />
       )}
     </div>

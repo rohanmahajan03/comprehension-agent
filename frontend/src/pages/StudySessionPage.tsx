@@ -209,7 +209,7 @@ export function StudySessionPage({ docId, sessionId, onExit }: Props) {
           · Current concept:{" "}
           <strong>{conceptName(studySession.current_concept_id)}</strong>
         </p>
-        <button onClick={onExit}>Back to graph</button>
+        <button onClick={onExit}>Back to Home</button>
         {/* The chapter's structure, coloured by what this session has shown. The page
             already fetched this graph for `conceptName`; until now it was never drawn. */}
         {visibleGraph && states && visibleGraph.concepts.length > 0 && (
