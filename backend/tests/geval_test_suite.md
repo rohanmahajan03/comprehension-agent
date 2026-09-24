@@ -151,7 +151,7 @@ Async means things happen without blocking. The caller doesn't have to wait for 
 A user sees a question on a message board and replies with "fine." When they reload the page their reply appears to be gone. This is because the write went to the leader, but the subsequent read was served by a follower replica that had not yet caught up with the leader's replication lag. From the user's perspective they have lost their own write, even though it was successfully recorded on the leader.
 
 **G-Eval criterion:**
-A good evaluator judgment correctly identifies whether the student has: (1) provided a plausible scenario where a user writes data and immediately reads it back, (2) correctly identified that the read was served by a replica that had not yet caught up with the leader due to replication lag, and (3) articulated that the write was successfully recorded but not yet visible to the reader. A judgment is poor if it penalizes a student for using a different but valid scenario, or awards credit to a response that cites the wrong mechanism such as transaction rollback, quorum failure, or disk persistence failure.
+A good evaluator judgment correctly identifies whether the student has: (1) provided a plausible scenario where a user writes data and immediately reads it back, and (2) attributed the missing write to replication lag — the read being served by a replica that has not yet caught up. Naming the leader and follower explicitly, or stating that the write was successfully recorded on the leader, is elaboration, not a requirement: "replication lag — the system hasn't synced yet" is sufficient. A judgment is poor if it penalizes a student for using a different but valid scenario, marks an answer incorrect solely for omitting that elaboration, or awards credit to a response that cites the wrong mechanism such as transaction rollback, quorum failure, or disk persistence failure.
 
 **Student answer variants:**
 
@@ -161,7 +161,7 @@ A user posts a reply on a message board and immediately refreshes the page. Thei
 2. *Correct — banking scenario:*
 A user transfers money from their checking account to their savings account and immediately checks their savings balance. The balance hasn't updated yet. This is because the write went to the leader but the subsequent read was served by a follower replica that hadn't yet caught up due to replication lag.
 
-3. *Partially correct — right scenario, wrong mechanism:*
+3. *Correct — concise, names replication lag without the leader/follower detail:*
 A user posts a reply on a message board and refreshes but the reply is gone. This is because of replication lag — the system hasn't synced yet so the user doesn't see their own write.
 
 4. *Clearly wrong — wrong concept applied:*
@@ -263,14 +263,14 @@ ACID means that databases handle transactions safely. Atomicity is all or nothin
 A time of day clock returns the current date and time and is synchronized across machines via NTP. However it can jump forwards or backwards due to NTP adjustments, making it unreliable for measuring elapsed time. A monotonic clock only moves forward and is suitable for measuring durations such as timeouts or response times on a single machine. NTP can slew a monotonic clock — speeding it up or slowing it down slightly — but cannot cause it to jump, preserving the monotonic guarantee. Monotonic clock values are meaningless in absolute terms and cannot be compared across machines.
 
 **G-Eval criterion:**
-A good evaluator judgment correctly identifies whether the student has: (1) described a time of day clock as returning current date and time, synchronized via NTP, but subject to forwards and backwards jumps making it unsuitable for measuring elapsed time, (2) described a monotonic clock as only moving forward, suitable for measuring durations on a single machine, and not comparable across machines, and (3) articulated that NTP can slew a monotonic clock but cannot cause it to jump. A judgment is poor if it awards credit to a response that describes the monotonic clock as synchronized across machines, or fails to penalize a response that incorrectly identifies the time of day clock as the safer option for measuring elapsed time.
+A good evaluator judgment correctly identifies whether the student has: (1) described a time of day clock as returning the current time, synchronized via NTP, but able to jump, making it unsuitable for measuring elapsed time, and (2) described a monotonic clock as only moving forward and therefore suited to measuring durations. NTP slewing of the monotonic clock, monotonic values not being comparable across machines, and the time of day clock jumping in both directions are elaboration, not requirements. A judgment is poor if it awards credit to a response that describes the monotonic clock as synchronized across machines, fails to penalize a response that identifies the time of day clock as the safer option for measuring elapsed time, awards credit to a response that never says the time of day clock can jump, or marks an answer incorrect solely for omitting the elaboration.
 
 **Student answer variants:**
 
 1. *Clearly correct:*
 A time of day clock returns the current date and time and is synchronized across machines via NTP, but can jump forwards or backwards due to NTP adjustments making it unreliable for measuring elapsed time. A monotonic clock only moves forward and is used for measuring durations like timeouts on a single machine. NTP can slew a monotonic clock by speeding it up or slowing it down but cannot cause it to jump. Monotonic clock values cannot be compared across machines.
 
-2. *Partially correct — gets basic distinction but misses slewing and cross-machine limitation:*
+2. *Correct — gets the core distinction, omits slewing and the cross-machine limitation:*
 A time of day clock tells you the current time and is synchronized with NTP but can jump backwards. A monotonic clock only moves forward so it is safer for measuring elapsed time like timeouts.
 
 3. *Clearly wrong — confuses the two:*

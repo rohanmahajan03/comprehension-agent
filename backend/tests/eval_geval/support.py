@@ -49,9 +49,15 @@ def assert_evaluator_judgment(
     metric_name: str,
     spec: GEvalSpec,
     threshold: float = 0.7,
+    expected_correct: bool | None = None,
 ) -> None:
     """Run the real evaluator on `student_answer`, then G-Eval-score its
     explanation against `golden_answer`.
+
+    `expected_correct`, when given, also asserts the evaluator's verdict
+    directly. Without it the verdict is only judged indirectly, by the GEval
+    judge reading the criteria — which is ambiguous for a variant sitting on
+    the line between "concise but correct" and "partial".
 
     `spec.evaluation_steps` must be frozen (generated once, hardcoded in
     criteria.py) so the judge's rubric isn't regenerated on every run.
@@ -65,6 +71,12 @@ def assert_evaluator_judgment(
     answer = Answer(question_id=question_id, text=student_answer)
 
     result = evaluator.evaluate(question, answer)
+
+    if expected_correct is not None:
+        assert result.correct is expected_correct, (
+            f"evaluator returned correct={result.correct}, expected "
+            f"{expected_correct}: {result.explanation}"
+        )
 
     test_case = LLMTestCase(
         input=student_answer,

@@ -12,7 +12,16 @@ _MODEL = "claude-haiku-4-5"
 
 _SYSTEM_PROMPT = """You are an answer evaluator for an adaptive tutoring system.
 
-You will be given a question, rubric notes describing what a correct answer should contain, and a student's answer.
+You will be given a question, a rubric, and a student's answer.
+
+The RUBRIC is a model answer written by an expert. It is deliberately more complete than a passing answer needs to be — do not treat each of its sentences as a requirement. Grade whether the student demonstrates the understanding the question asks for, not whether they reproduce the rubric.
+
+A brief answer can still be incorrect. Mark the answer incorrect if it:
+- states something factually wrong, or reverses a relationship (e.g. which causes which)
+- gets the question's main answer wrong (the wrong property, model, or mechanism)
+- only names or restates an idea instead of explaining it: a definition that rephrases the term itself ("a cache stores cached data"), or a justification that restates the outcome ("the query is slow because it takes a long time")
+- leaves out one of the items the question asks to list
+- gives no reason or mechanism when the question asks why or how
 
 Your job:
 1. Determine whether the student's answer is correct
@@ -25,7 +34,8 @@ Return your response as JSON matching this schema:
 }
 
 If correct, explanation should briefly confirm which rubric elements were satisfied.
-If incorrect, explanation should list precisely which rubric elements were absent or wrong. Do not speculate about the student's understanding — that is handled downstream."""
+If incorrect, explanation should list precisely which rubric elements were absent or wrong. Do not speculate about the student's understanding — that is handled downstream.
+In your explanation, do not credit the student with an idea they did not express. An idea expressed in different words, or illustrated with a different valid example, counts as expressed."""
 
 _OUTPUT_SCHEMA = {
     "type": "json_schema",
@@ -56,7 +66,7 @@ def evaluate(question: Question, answer: Answer) -> EvaluationResult:
     response = _client().messages.create(
         model=_MODEL,
         max_tokens=1024,
-        #temperature=0,
+        temperature=0,
         system=_SYSTEM_PROMPT,
         messages=[{"role": "user", "content": prompt}],
         output_config={"format": _OUTPUT_SCHEMA},

@@ -170,25 +170,29 @@ Q6_REPLICATION_LAG = GEvalSpec(
     criteria=(
         "A good evaluator judgment correctly identifies whether the student has: "
         "(1) provided a plausible scenario where a user writes data and immediately "
-        "reads it back, (2) correctly identified that the read was served by a "
-        "replica that had not yet caught up with the leader due to replication lag, "
-        "and (3) articulated that the write was successfully recorded but not yet "
-        "visible to the reader. A judgment is poor if it penalizes a student for "
-        "using a different but valid scenario, or awards credit to a response that "
-        "cites the wrong mechanism such as transaction rollback, quorum failure, or "
-        "disk persistence failure."
+        "reads it back, and (2) attributed the missing write to replication lag — "
+        "the read being served by a replica that has not yet caught up. Naming the "
+        "leader and follower explicitly, or stating that the write was successfully "
+        "recorded on the leader, is elaboration, not a requirement: \"replication "
+        "lag — the system hasn't synced yet\" is sufficient. A judgment is poor if "
+        "it penalizes a student for using a different but valid scenario, marks an "
+        "answer incorrect solely for omitting that elaboration, or awards credit to "
+        "a response that cites the wrong mechanism such as transaction rollback, "
+        "quorum failure, or disk persistence failure."
     ),
     evaluation_steps=[
         "Check whether the input describes a plausible scenario where a user writes "
         "data and then immediately reads it back, and whether the actual output "
         "accurately reports this regardless of which concrete scenario — message "
         "board, banking, or otherwise — was used.",
-        "Check whether the input correctly identifies that the read was served by a "
-        "replica that had not yet caught up with the leader due to replication lag, "
-        "and whether the actual output accurately reports this.",
-        "Check whether the input articulates that the write was successfully "
-        "recorded on the leader but not yet visible to the reader, and whether the "
-        "actual output accurately reports this.",
+        "Check whether the input attributes the missing write to replication lag — "
+        "a replica serving the read before it has caught up — and whether the "
+        "actual output accurately reports this. Plain wording such as 'the system "
+        "hasn't synced yet' counts, as long as replication lag is the stated cause.",
+        "Treat explicit mention of the leader and follower roles, or of the write "
+        "having been successfully recorded on the leader, as optional elaboration. "
+        "The actual output may mention its absence; penalize it only if its verdict "
+        "of incorrect rests on that omission alone.",
         "Penalize the actual output if it penalizes an input for using a scenario "
         "different from the golden example, as long as the scenario is otherwise "
         "valid.",
@@ -196,7 +200,7 @@ Q6_REPLICATION_LAG = GEvalSpec(
         "wrong mechanism, such as transaction rollback, quorum failure, or disk "
         "persistence failure, instead of replication lag.",
         "Penalize the actual output if its stated correct/incorrect determination "
-        "does not match what the expected output requires, or if its explanation is "
+        "does not match what the criteria require, or if its explanation is "
         "generic rather than tied to the specific content of the input.",
     ],
 )
@@ -311,36 +315,41 @@ Q9_ACID = GEvalSpec(
 Q10_CLOCKS = GEvalSpec(
     criteria=(
         "A good evaluator judgment correctly identifies whether the student has: "
-        "(1) described a time of day clock as returning current date and time, "
-        "synchronized via NTP, but subject to forwards and backwards jumps making it "
-        "unsuitable for measuring elapsed time, (2) described a monotonic clock as "
-        "only moving forward, suitable for measuring durations on a single machine, "
-        "and not comparable across machines, and (3) articulated that NTP can slew a "
-        "monotonic clock but cannot cause it to jump. A judgment is poor if it "
-        "awards credit to a response that describes the monotonic clock as "
-        "synchronized across machines, or fails to penalize a response that "
-        "incorrectly identifies the time of day clock as the safer option for "
-        "measuring elapsed time."
+        "(1) described a time of day clock as returning the current time, "
+        "synchronized via NTP, but able to jump, making it unsuitable for measuring "
+        "elapsed time, and (2) described a monotonic clock as only moving forward "
+        "and therefore suited to measuring durations. NTP slewing of the monotonic "
+        "clock, monotonic values not being comparable across machines, and the time "
+        "of day clock jumping in both directions are elaboration, not requirements. "
+        "A judgment is poor if it awards credit to a response that describes the "
+        "monotonic clock as synchronized across machines, fails to penalize a "
+        "response that identifies the time of day clock as the safer option for "
+        "measuring elapsed time, awards credit to a response that never says the "
+        "time of day clock can jump, or marks an answer incorrect solely for "
+        "omitting the elaboration."
     ),
     evaluation_steps=[
         "Check whether the input describes a time-of-day clock as returning the "
-        "current date and time, synchronized across machines via NTP, but subject "
-        "to forward and backward jumps that make it unsuitable for measuring "
-        "elapsed time, and whether the actual output accurately reports this.",
-        "Check whether the input describes a monotonic clock as only moving "
-        "forward, suitable for measuring durations such as timeouts on a single "
-        "machine, and not comparable across machines, and whether the actual output "
+        "current time, synchronized via NTP, but able to jump in a way that makes "
+        "it unsuitable for measuring elapsed time, and whether the actual output "
         "accurately reports this.",
-        "Check whether the input articulates that NTP can slew a monotonic clock "
-        "(speed it up or slow it down slightly) but cannot cause it to jump, and "
+        "Check whether the input describes a monotonic clock as only moving "
+        "forward and therefore suited to measuring durations such as timeouts, and "
         "whether the actual output accurately reports this.",
+        "Treat NTP slewing of the monotonic clock, monotonic values not being "
+        "comparable across machines, and the time-of-day clock jumping forwards as "
+        "well as backwards as optional elaboration. The actual output may list "
+        "them among what is missing; penalize it only if its verdict of incorrect "
+        "rests on those omissions alone.",
         "Penalize the actual output if it awards credit to an input that describes "
         "the monotonic clock as synchronized across machines.",
         "Penalize the actual output if it fails to penalize an input that "
         "incorrectly identifies the time-of-day clock as the safer option for "
         "measuring elapsed time.",
+        "Penalize the actual output if it awards credit to an input that never "
+        "says the time-of-day clock can jump.",
         "Penalize the actual output if its stated correct/incorrect determination "
-        "does not match what the expected output requires, or if its explanation is "
+        "does not match what the criteria require, or if its explanation is "
         "generic rather than tied to the specific content of the input.",
     ],
 )

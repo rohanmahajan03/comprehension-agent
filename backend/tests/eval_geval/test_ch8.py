@@ -45,7 +45,7 @@ def test_ch8_clocks_clearly_correct() -> None:
     )
 
 
-def test_ch8_clocks_partially_correct_missing_slewing_and_cross_machine() -> None:
+def test_ch8_clocks_correct_omits_slewing_and_cross_machine() -> None:
     assert_evaluator_judgment(
         question_id=_Q10_ID,
         concept_id=_Q10_CONCEPT_ID,
@@ -59,6 +59,7 @@ def test_ch8_clocks_partially_correct_missing_slewing_and_cross_machine() -> Non
         ),
         metric_name="Clocks Judgment Quality",
         spec=Q10_CLOCKS,
+        expected_correct=True,
     )
 
 
@@ -94,4 +95,5 @@ def test_ch8_clocks_partially_correct_missing_time_of_day_dangers() -> None:
         ),
         metric_name="Clocks Judgment Quality",
         spec=Q10_CLOCKS,
+        expected_correct=False,
     )

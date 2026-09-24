@@ -63,7 +63,7 @@ def test_ch5_replication_lag_correct_banking_scenario() -> None:
     )
 
 
-def test_ch5_replication_lag_partially_correct_right_scenario_wrong_mechanism() -> None:
+def test_ch5_replication_lag_correct_concise_mechanism() -> None:
     assert_evaluator_judgment(
         question_id=_Q6_ID,
         concept_id=_Q6_CONCEPT_ID,
@@ -77,6 +77,7 @@ def test_ch5_replication_lag_partially_correct_right_scenario_wrong_mechanism() 
         ),
         metric_name="Replication Lag Judgment Quality",
         spec=Q6_REPLICATION_LAG,
+        expected_correct=True,
     )
 
 

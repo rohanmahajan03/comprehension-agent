@@ -94,4 +94,5 @@ def test_ch7_acid_partially_correct_vague_definitions() -> None:
         ),
         metric_name="ACID Judgment Quality",
         spec=Q9_ACID,
+        expected_correct=False,
     )
