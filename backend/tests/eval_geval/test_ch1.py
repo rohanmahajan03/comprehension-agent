@@ -19,6 +19,13 @@ _Q1_GOLDEN = (
     "the result. The goal of fault-tolerant systems is to prevent faults "
     "from escalating into failures."
 )
+# The minimum bar, taken from the numbered items in this question's G-Eval
+# criterion — what question_generator's `required_points` should produce.
+_Q1_POINTS = [
+    'A fault is an individual component deviating from its specification.',
+    'A failure is the system as a whole no longer providing its required service to the user.',
+    'Faults cause failures, not the other way round.',
+]
 
 
 def test_ch1_fault_vs_failure_clearly_correct() -> None:
@@ -27,6 +34,7 @@ def test_ch1_fault_vs_failure_clearly_correct() -> None:
         concept_id=_Q1_CONCEPT_ID,
         prompt=_Q1_PROMPT,
         golden_answer=_Q1_GOLDEN,
+        required_points=_Q1_POINTS,
         student_answer=(
             "A fault is when an individual component deviates from its "
             "specification — for example a disk returning corrupted data. A "
@@ -46,6 +54,7 @@ def test_ch1_fault_vs_failure_partially_correct_missing_causal_link() -> None:
         concept_id=_Q1_CONCEPT_ID,
         prompt=_Q1_PROMPT,
         golden_answer=_Q1_GOLDEN,
+        required_points=_Q1_POINTS,
         student_answer=(
             "A fault is when a component in a system stops working "
             "correctly. A failure is when the entire system goes down. "
@@ -63,6 +72,7 @@ def test_ch1_fault_vs_failure_clearly_wrong_conflates_fault_and_failure() -> Non
         concept_id=_Q1_CONCEPT_ID,
         prompt=_Q1_PROMPT,
         golden_answer=_Q1_GOLDEN,
+        required_points=_Q1_POINTS,
         student_answer=(
             "A fault and a failure are the same thing — they both refer to "
             "when a system stops working and is unavailable to users."
@@ -78,6 +88,7 @@ def test_ch1_fault_vs_failure_reversed_causal_direction() -> None:
         concept_id=_Q1_CONCEPT_ID,
         prompt=_Q1_PROMPT,
         golden_answer=_Q1_GOLDEN,
+        required_points=_Q1_POINTS,
         student_answer=(
             "A fault is when the entire system crashes. A failure is when "
             "an individual component misbehaves. Failures cause faults, so "
@@ -104,6 +115,13 @@ _Q2_GOLDEN = (
     "fails, it has no fault tolerance — meaning a single hardware fault "
     "escalates directly into a system-wide failure."
 )
+# The minimum bar, taken from the numbered items in this question's G-Eval
+# criterion — what question_generator's `required_points` should produce.
+_Q2_POINTS = [
+    'The violated property is reliability.',
+    'A reliable system should tolerate an individual node failing and keep operating.',
+    "Here a single node's failure escalates into a system-wide failure, which is why reliability is violated.",
+]
 
 
 def test_ch1_reliability_violation_clearly_correct() -> None:
@@ -112,6 +130,7 @@ def test_ch1_reliability_violation_clearly_correct() -> None:
         concept_id=_Q2_CONCEPT_ID,
         prompt=_Q2_PROMPT,
         golden_answer=_Q2_GOLDEN,
+        required_points=_Q2_POINTS,
         student_answer=(
             "The property violated is reliability. A reliable system "
             "should be able to tolerate individual node failures and "
@@ -130,6 +149,7 @@ def test_ch1_reliability_violation_partially_correct_weak_justification() -> Non
         concept_id=_Q2_CONCEPT_ID,
         prompt=_Q2_PROMPT,
         golden_answer=_Q2_GOLDEN,
+        required_points=_Q2_POINTS,
         student_answer=(
             "Reliability is violated because the system went down. A "
             "reliable system should not go down."
@@ -145,6 +165,7 @@ def test_ch1_reliability_violation_clearly_wrong_identifies_scalability() -> Non
         concept_id=_Q2_CONCEPT_ID,
         prompt=_Q2_PROMPT,
         golden_answer=_Q2_GOLDEN,
+        required_points=_Q2_POINTS,
         student_answer=(
             "The property violated is scalability. The system cannot "
             "handle the load when a node goes down, which means it is not "
@@ -161,6 +182,7 @@ def test_ch1_reliability_violation_correct_conclusion_wrong_justification() -> N
         concept_id=_Q2_CONCEPT_ID,
         prompt=_Q2_PROMPT,
         golden_answer=_Q2_GOLDEN,
+        required_points=_Q2_POINTS,
         student_answer=(
             "Reliability is violated because the system is not "
             "maintainable enough to recover from a node failure. The "

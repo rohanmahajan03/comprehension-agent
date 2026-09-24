@@ -24,6 +24,12 @@ _Q7_GOLDEN = (
     "partitions, becoming a hotspot. The load is not evenly distributed "
     "because one key generates far more traffic than others."
 )
+# The minimum bar, taken from the numbered items in this question's G-Eval
+# criterion — what question_generator's `required_points` should produce.
+_Q7_POINTS = [
+    "Because the system is partitioned by user_id, all interactions with the celebrity's tweet land on the same partition.",
+    'That partition becomes a hotspot, receiving disproportionately more traffic than the others.',
+]
 
 
 def test_ch6_partition_hotspot_clearly_correct() -> None:
@@ -32,6 +38,7 @@ def test_ch6_partition_hotspot_clearly_correct() -> None:
         concept_id=_Q7_CONCEPT_ID,
         prompt=_Q7_PROMPT,
         golden_answer=_Q7_GOLDEN,
+        required_points=_Q7_POINTS,
         student_answer=(
             "Since the system is partitioned by user_id, all interactions "
             "with the celebrity's tweet map to the same partition. That "
@@ -51,6 +58,7 @@ def test_ch6_partition_hotspot_partially_correct_missing_why() -> None:
         concept_id=_Q7_CONCEPT_ID,
         prompt=_Q7_PROMPT,
         golden_answer=_Q7_GOLDEN,
+        required_points=_Q7_POINTS,
         student_answer=(
             "The celebrity's partition becomes a hotspot because too many "
             "people are interacting with their tweet at once. This causes "
@@ -67,6 +75,7 @@ def test_ch6_partition_hotspot_clearly_wrong_confuses_replication() -> None:
         concept_id=_Q7_CONCEPT_ID,
         prompt=_Q7_PROMPT,
         golden_answer=_Q7_GOLDEN,
+        required_points=_Q7_POINTS,
         student_answer=(
             "The issue is that the celebrity's tweet needs to be "
             "replicated to 10 million followers' feeds simultaneously, "
@@ -83,6 +92,7 @@ def test_ch6_partition_hotspot_correct_conclusion_wrong_justification() -> None:
         concept_id=_Q7_CONCEPT_ID,
         prompt=_Q7_PROMPT,
         golden_answer=_Q7_GOLDEN,
+        required_points=_Q7_POINTS,
         student_answer=(
             "The partition becomes a hotspot because the system is not "
             "using consistent hashing, which would distribute the "
@@ -108,6 +118,14 @@ _Q8_GOLDEN = (
     "those user_ids are then looked up in their respective primary key "
     "partitions on node A or node B."
 )
+# The minimum bar, taken from the numbered items in this question's G-Eval
+# criterion — what question_generator's `required_points` should produce.
+_Q8_POINTS = [
+    'The primary key is partitioned across nodes by a valid scheme, shown with a concrete example.',
+    'The GSI is partitioned independently of the primary key.',
+    'GSI entries point to primary keys rather than storing full records.',
+    'Retrieving the full records requires a second lookup in the primary key partitions.',
+]
 
 
 def test_ch6_gsi_layout_clearly_correct_range_partitioned() -> None:
@@ -116,6 +134,7 @@ def test_ch6_gsi_layout_clearly_correct_range_partitioned() -> None:
         concept_id=_Q8_CONCEPT_ID,
         prompt=_Q8_PROMPT,
         golden_answer=_Q8_GOLDEN,
+        required_points=_Q8_POINTS,
         student_answer=(
             "A system partitioned by user_id has node A holding user_ids "
             "1-1000 and node B holding user_ids 1001-2000. A GSI on "
@@ -136,6 +155,7 @@ def test_ch6_gsi_layout_correct_hash_partitioned_different_attribute() -> None:
         concept_id=_Q8_CONCEPT_ID,
         prompt=_Q8_PROMPT,
         golden_answer=_Q8_GOLDEN,
+        required_points=_Q8_POINTS,
         student_answer=(
             "A system uses hash partitioning on user_id, so user records "
             "are distributed across nodes A, B, and C based on a hash "
@@ -157,6 +177,7 @@ def test_ch6_gsi_layout_partially_correct_describes_local_index() -> None:
         concept_id=_Q8_CONCEPT_ID,
         prompt=_Q8_PROMPT,
         golden_answer=_Q8_GOLDEN,
+        required_points=_Q8_POINTS,
         student_answer=(
             "Node A holds user_ids 1-1000 and node B holds user_ids "
             "1001-2000. Each node also stores a local index on "
@@ -175,6 +196,7 @@ def test_ch6_gsi_layout_clearly_wrong_confuses_sorting() -> None:
         concept_id=_Q8_CONCEPT_ID,
         prompt=_Q8_PROMPT,
         golden_answer=_Q8_GOLDEN,
+        required_points=_Q8_POINTS,
         student_answer=(
             "Node A holds user_ids 1-1000 sorted by favorite_color so "
             "that queries on favorite_color can be resolved without "
@@ -191,6 +213,7 @@ def test_ch6_gsi_layout_partially_correct_missing_pointer_structure() -> None:
         concept_id=_Q8_CONCEPT_ID,
         prompt=_Q8_PROMPT,
         golden_answer=_Q8_GOLDEN,
+        required_points=_Q8_POINTS,
         student_answer=(
             "Node C holds all records where favorite_color = 'blue' "
             "copied directly from the primary key partitions, so a query "

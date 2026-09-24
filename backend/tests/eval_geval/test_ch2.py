@@ -24,6 +24,13 @@ _Q3_GOLDEN = (
     "because they lack native join support, forcing you to either "
     "denormalize data or resolve references manually in application code."
 )
+# The minimum bar, taken from the numbered items in this question's G-Eval
+# criterion — what question_generator's `required_points` should produce.
+_Q3_POINTS = [
+    'The relational model handles this better.',
+    'Many-to-many relationships require joins.',
+    'Document databases struggle with many-to-many relationships because they lack native join support, forcing denormalization or resolving references in application code.',
+]
 
 
 def test_ch2_relational_vs_document_clearly_correct() -> None:
@@ -32,6 +39,7 @@ def test_ch2_relational_vs_document_clearly_correct() -> None:
         concept_id=_Q3_CONCEPT_ID,
         prompt=_Q3_PROMPT,
         golden_answer=_Q3_GOLDEN,
+        required_points=_Q3_POINTS,
         student_answer=(
             "Relational is better here. A student can enroll in many "
             "courses and a course can have many students — this is a "
@@ -53,6 +61,7 @@ def test_ch2_relational_vs_document_partially_correct_weak_justification() -> No
         concept_id=_Q3_CONCEPT_ID,
         prompt=_Q3_PROMPT,
         golden_answer=_Q3_GOLDEN,
+        required_points=_Q3_POINTS,
         student_answer=(
             "Relational is better because document databases are not good "
             "at relationships. Relational databases are designed for this "
@@ -69,6 +78,7 @@ def test_ch2_relational_vs_document_clearly_wrong_picks_document() -> None:
         concept_id=_Q3_CONCEPT_ID,
         prompt=_Q3_PROMPT,
         golden_answer=_Q3_GOLDEN,
+        required_points=_Q3_POINTS,
         student_answer=(
             "Document is better here. You can nest the courses a student "
             "is enrolled in directly inside the student document, making "
@@ -85,6 +95,7 @@ def test_ch2_relational_vs_document_correct_conclusion_wrong_justification() -> 
         concept_id=_Q3_CONCEPT_ID,
         prompt=_Q3_PROMPT,
         golden_answer=_Q3_GOLDEN,
+        required_points=_Q3_POINTS,
         student_answer=(
             "Relational is better because relational databases are faster "
             "and more scalable than document databases for this type of "

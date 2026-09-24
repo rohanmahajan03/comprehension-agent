@@ -5,6 +5,9 @@ export interface Question {
   concept_id: string
   prompt: string
   expected_answer_notes: string
+  // The minimum an answer must express to be marked correct. Empty for questions written
+  // before the field existed and for diagnostic questions.
+  required_points: string[]
 }
 
 export interface Concept {

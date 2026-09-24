@@ -14,6 +14,7 @@ function question(conceptId: string, suffix: string): Question {
     concept_id: conceptId,
     prompt: 'p',
     expected_answer_notes: 'n',
+    required_points: [],
   }
 }
 

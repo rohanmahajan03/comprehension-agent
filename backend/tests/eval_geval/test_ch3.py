@@ -17,6 +17,12 @@ _Q4_GOLDEN = (
     "updated every time data is written. The choice of what to index is a "
     "tradeoff that is left to the application developer."
 )
+# The minimum bar, taken from the numbered items in this question's G-Eval
+# criterion — what question_generator's `required_points` should produce.
+_Q4_POINTS = [
+    'An index is a separate data structure that lets the database locate data without scanning the whole dataset.',
+    'Indexes speed up reads but slow down writes, because the index must be updated on every write.',
+]
 
 
 def test_ch3_indexing_clearly_correct() -> None:
@@ -25,6 +31,7 @@ def test_ch3_indexing_clearly_correct() -> None:
         concept_id=_Q4_CONCEPT_ID,
         prompt=_Q4_PROMPT,
         golden_answer=_Q4_GOLDEN,
+        required_points=_Q4_POINTS,
         student_answer=(
             "An index is a separate data structure that helps a database "
             "locate data efficiently without scanning the entire dataset. "
@@ -44,6 +51,7 @@ def test_ch3_indexing_partially_correct_misses_tradeoff() -> None:
         concept_id=_Q4_CONCEPT_ID,
         prompt=_Q4_PROMPT,
         golden_answer=_Q4_GOLDEN,
+        required_points=_Q4_POINTS,
         student_answer=(
             "An index is a data structure that makes querying a database "
             "faster by organizing data so it can be found without "
@@ -60,6 +68,7 @@ def test_ch3_indexing_clearly_wrong_conflates_sorting() -> None:
         concept_id=_Q4_CONCEPT_ID,
         prompt=_Q4_PROMPT,
         golden_answer=_Q4_GOLDEN,
+        required_points=_Q4_POINTS,
         student_answer=(
             "An index is when you sort your database table alphabetically "
             "or numerically so that queries run faster."
@@ -75,6 +84,7 @@ def test_ch3_indexing_correct_but_vague() -> None:
         concept_id=_Q4_CONCEPT_ID,
         prompt=_Q4_PROMPT,
         golden_answer=_Q4_GOLDEN,
+        required_points=_Q4_POINTS,
         student_answer=(
             "An index helps a database find data faster. Without an index "
             "queries would be slow."

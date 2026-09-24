@@ -45,6 +45,7 @@ def assert_evaluator_judgment(
     concept_id: str,
     prompt: str,
     golden_answer: str,
+    required_points: list[str],
     student_answer: str,
     metric_name: str,
     spec: GEvalSpec,
@@ -67,6 +68,7 @@ def assert_evaluator_judgment(
         concept_id=concept_id,
         prompt=prompt,
         expected_answer_notes=golden_answer,
+        required_points=required_points,
     )
     answer = Answer(question_id=question_id, text=student_answer)
 

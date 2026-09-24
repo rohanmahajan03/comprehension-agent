@@ -12,29 +12,21 @@ _MODEL = "claude-haiku-4-5"
 
 _SYSTEM_PROMPT = """You are an answer evaluator for an adaptive tutoring system.
 
-You will be given a question, a rubric, and a student's answer.
+You will be given a question, usually a list of REQUIRED POINTS, a MODEL ANSWER, and a student's answer.
 
-The RUBRIC is a model answer written by an expert. It is deliberately more complete than a passing answer needs to be — do not treat each of its sentences as a requirement. Grade whether the student demonstrates the understanding the question asks for, not whether they reproduce the rubric.
+The REQUIRED POINTS are the bar. The MODEL ANSWER is written by an expert and is deliberately more complete than a passing answer needs to be: use it only to understand what each required point means. Anything in it that is not a required point is optional, so never mark an answer incorrect for leaving it out, and never list it as missing.
 
-A brief answer can still be incorrect. Mark the answer incorrect if it:
-- states something factually wrong, or reverses a relationship (e.g. which causes which)
-- gets the question's main answer wrong (the wrong property, model, or mechanism)
-- only names or restates an idea instead of explaining it: a definition that rephrases the term itself ("a cache stores cached data"), or a justification that restates the outcome ("the query is slow because it takes a long time")
-- leaves out one of the items the question asks to list
-- gives no reason or mechanism when the question asks why or how
+If no REQUIRED POINTS are given, first identify the few points the question itself requires an answer to express, then grade against those the same way.
 
-Your job:
-1. Determine whether the student's answer is correct
-2. If incorrect or incomplete, identify specifically which elements required by the rubric are missing or wrong — stay close to the rubric, do not interpret or diagnose why
+A point is expressed if the student states or explains that idea, in any wording or with any valid example of their own. A point is NOT expressed if the student only names the idea or restates the term instead of explaining it (a definition that rephrases the term itself, such as "a cache stores cached data"), or gives a conclusion without the reason or mechanism the point calls for (such as "the query is slow because it takes a long time").
 
-Return your response as JSON matching this schema:
-{
-  "correct": bool,
-  "explanation": string
-}
+Check every point before deciding. The answer is correct only if it expresses every point and states nothing factually wrong. Mark it incorrect if it states something factually wrong or reverses a relationship (e.g. which causes which), even if every point is otherwise expressed.
 
-If correct, explanation should briefly confirm which rubric elements were satisfied.
-If incorrect, explanation should list precisely which rubric elements were absent or wrong. Do not speculate about the student's understanding — that is handled downstream.
+Return your response as JSON:
+- point_checks: one entry per point, in order, with the point and whether the student expressed it
+- correct: your verdict
+- explanation: if correct, briefly confirm the points expressed. If incorrect, name the points that are missing or wrong, and any factual error — never optional material. Do not speculate about the student's understanding — that is handled downstream.
+
 In your explanation, do not credit the student with an idea they did not express. An idea expressed in different words, or illustrated with a different valid example, counts as expressed."""
 
 _OUTPUT_SCHEMA = {
@@ -42,10 +34,24 @@ _OUTPUT_SCHEMA = {
     "schema": {
         "type": "object",
         "properties": {
+            # Listed before `correct` so the model works through each point before it
+            # commits to a verdict. Not returned to callers: EvaluationResult is unchanged.
+            "point_checks": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "point": {"type": "string"},
+                        "expressed": {"type": "boolean"},
+                    },
+                    "required": ["point", "expressed"],
+                    "additionalProperties": False,
+                },
+            },
             "correct": {"type": "boolean"},
             "explanation": {"type": "string"},
         },
-        "required": ["correct", "explanation"],
+        "required": ["point_checks", "correct", "explanation"],
         "additionalProperties": False,
     },
 }
@@ -57,10 +63,16 @@ def _client() -> anthropic.Anthropic:
 
 
 def evaluate(question: Question, answer: Answer) -> EvaluationResult:
-    """Grade `answer` against `question` by asking Claude to check it against the rubric."""
-    prompt = (
-        f"QUESTION:\n{question.prompt}\n\n"
-        f"RUBRIC:\n{question.expected_answer_notes}\n\n"
+    """Grade `answer` against `question`'s required points, using its model answer
+    (`expected_answer_notes`) only to interpret them. A question with no required points
+    (written before the field existed, or a diagnostic probe) is graded against points
+    the evaluator identifies from the question itself."""
+    prompt = f"QUESTION:\n{question.prompt}\n\n"
+    if question.required_points:
+        points = "\n".join(f"{i}. {p}" for i, p in enumerate(question.required_points, 1))
+        prompt += f"REQUIRED POINTS:\n{points}\n\n"
+    prompt += (
+        f"MODEL ANSWER:\n{question.expected_answer_notes}\n\n"
         f"STUDENT ANSWER:\n{answer.text}"
     )
     response = _client().messages.create(

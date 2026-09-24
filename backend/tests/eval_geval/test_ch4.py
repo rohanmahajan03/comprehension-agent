@@ -16,6 +16,12 @@ _Q5_GOLDEN = (
     "for processing to complete. The work happens in the background and "
     "the caller has no guarantee about when it will finish."
 )
+# The minimum bar, taken from the numbered items in this question's G-Eval
+# criterion — what question_generator's `required_points` should produce.
+_Q5_POINTS = [
+    'With async, control returns to the caller as soon as the request is acknowledged, not when processing completes.',
+    'The processing happens in the background, with no guarantee of when it will finish.',
+]
 
 
 def test_ch4_async_clearly_correct_includes_sync() -> None:
@@ -24,6 +30,7 @@ def test_ch4_async_clearly_correct_includes_sync() -> None:
         concept_id=_Q5_CONCEPT_ID,
         prompt=_Q5_PROMPT,
         golden_answer=_Q5_GOLDEN,
+        required_points=_Q5_POINTS,
         student_answer=(
             "Async means that when a request is made, control returns to "
             "the caller immediately after the request is acknowledged, "
@@ -44,6 +51,7 @@ def test_ch4_async_partially_correct_missing_acknowledgement() -> None:
         concept_id=_Q5_CONCEPT_ID,
         prompt=_Q5_PROMPT,
         golden_answer=_Q5_GOLDEN,
+        required_points=_Q5_POINTS,
         student_answer=(
             "Async means that work happens in the background so the "
             "caller doesn't have to wait. This makes systems faster."
@@ -59,6 +67,7 @@ def test_ch4_async_clearly_wrong_conflates_parallelism() -> None:
         concept_id=_Q5_CONCEPT_ID,
         prompt=_Q5_PROMPT,
         golden_answer=_Q5_GOLDEN,
+        required_points=_Q5_POINTS,
         student_answer=(
             "Async means that multiple requests are processed at the same "
             "time in parallel, allowing the system to handle more load."
@@ -74,6 +83,7 @@ def test_ch4_async_correct_but_vague() -> None:
         concept_id=_Q5_CONCEPT_ID,
         prompt=_Q5_PROMPT,
         golden_answer=_Q5_GOLDEN,
+        required_points=_Q5_POINTS,
         student_answer=(
             "Async means things happen without blocking. The caller "
             "doesn't have to wait for the response."

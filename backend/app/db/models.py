@@ -64,6 +64,9 @@ class QuestionRow(Base):
     concept_id: Mapped[str] = mapped_column(ForeignKey("concepts.id", ondelete="CASCADE"))
     prompt: Mapped[str]
     expected_answer_notes: Mapped[str]
+    # list[str], the minimum bar the evaluator grades against. JSONB for the same reason
+    # as `concepts.source_quotes`: only ever read back whole, alongside its question.
+    required_points: Mapped[list[str]] = mapped_column(JSONB, server_default="[]", default=list)
 
     concept: Mapped[ConceptRow] = relationship(back_populates="questions")
 

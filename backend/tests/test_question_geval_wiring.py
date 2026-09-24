@@ -39,6 +39,7 @@ def fake_clients(monkeypatch: pytest.MonkeyPatch) -> None:
                         "question": "What is it?",
                         "expected_answer": "A sufficiently long model answer that states "
                         "the substance of the concept in the student's own voice.",
+                        "required_points": ["The concept's one essential idea."],
                         "source_ids": ["s1"],
                     }
                 ],

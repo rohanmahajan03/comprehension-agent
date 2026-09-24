@@ -21,6 +21,8 @@ class RawQuestion(TypedDict):
     type: str
     question: str
     expected_answer: str
+    # The minimum bar the evaluator grades against; `expected_answer` is the full model answer.
+    required_points: list[str]
     # Ids the model cited; `grounding` is assembled from them in code, never retyped by
     # the model — see source_passages() for why.
     source_ids: list[str]
@@ -70,6 +72,10 @@ question if the type genuinely fits — it is better to skip a type than to forc
    them, or states how one relates to the other. Two concepts being described
    separately in different passages is NOT a contrast; skip this type rather than
    inventing the comparison yourself.
+   The target stays the subject: a correct answer must mostly explain the target, with
+   the other concept serving only as the point of comparison. Never ask the student to
+   explain the other concept itself, or why it has to exist first — that concept has its
+   own questions.
 
 3. enumeration_completeness — ask the student to list all items in a fixed set
    associated with the target concept
@@ -98,6 +104,7 @@ Return only valid JSON. No preamble, no explanation, no markdown fences.
       "type": "conceptual_correctness | conceptual_distinction | enumeration_completeness | open_ended_example | applied_reasoning",
       "question": "string",
       "expected_answer": "the ideal student response to this question, in prose",
+      "required_points": ["each idea an answer must express to be marked correct"],
       "source_ids": ["id of each source passage this question draws on"]
     }
   ]
@@ -140,6 +147,16 @@ Return only valid JSON. No preamble, no explanation, no markdown fences.
    student's own novel example or line of reasoning and will NOT appear in the
    evidence: write what any valid answer has to demonstrate rather than committing to
    one specific example, so a different-but-correct answer isn't marked wrong.
+10. Write `required_points`: the minimum an answer must express to be marked correct,
+   usually two to four points. This is the bar the evaluator grades against, and
+   `expected_answer` is deliberately more than a passing answer needs. So these points
+   are not a summary of it: include a point only if an answer without it fails to
+   answer the question actually asked, and leave out supporting detail, elaboration,
+   and secondary consequences. Each point is one idea, stated as a complete fact in a
+   single sentence, in the same self-contained voice as `expected_answer` (never "as the
+   passage says"). For enumeration_completeness, every item in the set is its own point.
+   For open_ended_example and applied_reasoning, state what any valid answer must show,
+   never a specific example. Every point must be supported by `expected_answer`.
 
 ## Input
 
@@ -160,9 +177,12 @@ _OUTPUT_SCHEMA = {
                         "type": {"type": "string", "enum": _QUESTION_TYPES},
                         "question": {"type": "string"},
                         "expected_answer": {"type": "string"},
+                        "required_points": {"type": "array", "items": {"type": "string"}},
                         "source_ids": {"type": "array", "items": {"type": "string"}},
                     },
-                    "required": ["type", "question", "expected_answer", "source_ids"],
+                    "required": [
+                        "type", "question", "expected_answer", "required_points", "source_ids",
+                    ],
                     "additionalProperties": False,
                 },
             },
@@ -320,6 +340,7 @@ def generate_questions(graph: DependencyGraph) -> None:
                 concept_id=concept.id,
                 prompt=q["question"],
                 expected_answer_notes=format_answer_notes(q["expected_answer"], q["grounding"]),
+                required_points=[p.strip() for p in q["required_points"] if p.strip()],
             )
             for i, q in enumerate(raw_questions)
         ]

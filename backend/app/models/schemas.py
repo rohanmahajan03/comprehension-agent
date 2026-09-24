@@ -20,6 +20,16 @@ class Question(BaseModel):
     expected_answer_notes: str = Field(
         description="Notes for the evaluator on what a correct answer should contain"
     )
+    required_points: list[str] = Field(
+        default_factory=list,
+        description=(
+            "The minimum an answer must express to be marked correct, one idea per entry. "
+            "`expected_answer_notes` is a complete model answer and deliberately more than a "
+            "passing answer needs; these points are the bar. Empty for questions written "
+            "before the field existed and for diagnostic questions, which the evaluator "
+            "grades against the model answer alone."
+        ),
+    )
 
 
 class Concept(BaseModel):

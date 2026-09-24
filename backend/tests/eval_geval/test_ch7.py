@@ -20,6 +20,14 @@ _Q9_GOLDEN = (
     "Durability means that once a transaction is committed, the data will "
     "not be lost even in the event of a fault."
 )
+# The minimum bar, taken from the numbered items in this question's G-Eval
+# criterion — what question_generator's `required_points` should produce.
+_Q9_POINTS = [
+    'Atomicity: all writes in a transaction succeed or none do, never leaving an intermediate state.',
+    'Consistency: the database never violates its invariants.',
+    "Isolation: concurrent transactions execute as if serially and do not see each other's intermediate state.",
+    'Durability: once a transaction is committed, its data is not lost even if a fault occurs.',
+]
 
 
 def test_ch7_acid_clearly_correct() -> None:
@@ -28,6 +36,7 @@ def test_ch7_acid_clearly_correct() -> None:
         concept_id=_Q9_CONCEPT_ID,
         prompt=_Q9_PROMPT,
         golden_answer=_Q9_GOLDEN,
+        required_points=_Q9_POINTS,
         student_answer=(
             "ACID stands for Atomicity, Consistency, Isolation, and "
             "Durability. Atomicity means all writes in a transaction "
@@ -48,6 +57,7 @@ def test_ch7_acid_partially_correct_missing_durability() -> None:
         concept_id=_Q9_CONCEPT_ID,
         prompt=_Q9_PROMPT,
         golden_answer=_Q9_GOLDEN,
+        required_points=_Q9_POINTS,
         student_answer=(
             "ACID stands for Atomicity, Consistency, Isolation, and "
             "Durability. Atomicity means all writes succeed or none do. "
@@ -67,6 +77,7 @@ def test_ch7_acid_clearly_wrong_wrong_definitions() -> None:
         concept_id=_Q9_CONCEPT_ID,
         prompt=_Q9_PROMPT,
         golden_answer=_Q9_GOLDEN,
+        required_points=_Q9_POINTS,
         student_answer=(
             "ACID stands for Atomicity, Consistency, Isolation, and "
             "Durability. Atomicity means the database processes one "
@@ -86,6 +97,7 @@ def test_ch7_acid_partially_correct_vague_definitions() -> None:
         concept_id=_Q9_CONCEPT_ID,
         prompt=_Q9_PROMPT,
         golden_answer=_Q9_GOLDEN,
+        required_points=_Q9_POINTS,
         student_answer=(
             "ACID means that databases handle transactions safely. "
             "Atomicity is all or nothing, consistency keeps the data "

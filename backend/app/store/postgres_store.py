@@ -50,6 +50,7 @@ def _to_question(row: QuestionRow) -> Question:
         concept_id=row.concept_id,
         prompt=row.prompt,
         expected_answer_notes=row.expected_answer_notes,
+        required_points=row.required_points,
     )
 
 
@@ -257,6 +258,7 @@ class PostgresStore(Store):
                     concept_id=concept_id,
                     prompt=q.prompt,
                     expected_answer_notes=q.expected_answer_notes,
+                    required_points=q.required_points,
                 )
                 stmt = stmt.on_conflict_do_update(
                     index_elements=["id"],
@@ -264,6 +266,7 @@ class PostgresStore(Store):
                         "concept_id": stmt.excluded.concept_id,
                         "prompt": stmt.excluded.prompt,
                         "expected_answer_notes": stmt.excluded.expected_answer_notes,
+                        "required_points": stmt.excluded.required_points,
                     },
                 )
                 session.execute(stmt)

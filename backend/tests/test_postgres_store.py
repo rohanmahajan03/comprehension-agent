@@ -189,6 +189,24 @@ def test_question_appears_on_graph_reload_without_a_second_save_graph_call(
     assert [q.id for q in a.questions] == ["doc1:a:q1"]
 
 
+def test_required_points_round_trip_and_upsert(store: PostgresStore) -> None:
+    """`required_points` is the bar the evaluator grades against, so losing it on a save or
+    a re-save silently reverts that question to guessed-bar grading."""
+    store.save_document("doc1", "text")
+    store.save_graph(
+        DependencyGraph(doc_id="doc1", concepts=[Concept(id="doc1:a", name="A", summary="S.")])
+    )
+    q = Question(
+        id="doc1:a:q1", concept_id="doc1:a", prompt="p", expected_answer_notes="n",
+        required_points=["First point.", "Second point."],
+    )
+    store.save_questions("doc1:a", [q])
+    assert store.get_questions("doc1:a")[0].required_points == ["First point.", "Second point."]
+
+    store.save_questions("doc1:a", [q.model_copy(update={"required_points": ["Revised."]})])
+    assert store.get_questions("doc1:a")[0].required_points == ["Revised."]
+
+
 def test_get_questions_distinguishes_no_concept_from_no_questions(store: PostgresStore) -> None:
     store.save_document("doc1", "text")
     graph = DependencyGraph(

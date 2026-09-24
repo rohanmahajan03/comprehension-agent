@@ -22,6 +22,12 @@ _Q6_GOLDEN = (
     "their own write, even though it was successfully recorded on the "
     "leader."
 )
+# The minimum bar, taken from the numbered items in this question's G-Eval
+# criterion — what question_generator's `required_points` should produce.
+_Q6_POINTS = [
+    'The scenario has a user write data and then immediately read it back.',
+    'The write appears missing because the read was served by a replica that had not yet caught up, due to replication lag.',
+]
 
 
 def test_ch5_replication_lag_correct_message_board_scenario() -> None:
@@ -30,6 +36,7 @@ def test_ch5_replication_lag_correct_message_board_scenario() -> None:
         concept_id=_Q6_CONCEPT_ID,
         prompt=_Q6_PROMPT,
         golden_answer=_Q6_GOLDEN,
+        required_points=_Q6_POINTS,
         student_answer=(
             "A user posts a reply on a message board and immediately "
             "refreshes the page. Their reply is gone. This is because the "
@@ -50,6 +57,7 @@ def test_ch5_replication_lag_correct_banking_scenario() -> None:
         concept_id=_Q6_CONCEPT_ID,
         prompt=_Q6_PROMPT,
         golden_answer=_Q6_GOLDEN,
+        required_points=_Q6_POINTS,
         student_answer=(
             "A user transfers money from their checking account to their "
             "savings account and immediately checks their savings "
@@ -69,6 +77,7 @@ def test_ch5_replication_lag_correct_concise_mechanism() -> None:
         concept_id=_Q6_CONCEPT_ID,
         prompt=_Q6_PROMPT,
         golden_answer=_Q6_GOLDEN,
+        required_points=_Q6_POINTS,
         student_answer=(
             "A user posts a reply on a message board and refreshes but "
             "the reply is gone. This is because of replication lag — the "
@@ -87,6 +96,7 @@ def test_ch5_replication_lag_clearly_wrong_quorum_rollback() -> None:
         concept_id=_Q6_CONCEPT_ID,
         prompt=_Q6_PROMPT,
         golden_answer=_Q6_GOLDEN,
+        required_points=_Q6_POINTS,
         student_answer=(
             "A user posts a reply on a message board and refreshes but "
             "the reply is gone. This is because the database rolled back "
@@ -104,6 +114,7 @@ def test_ch5_replication_lag_clearly_wrong_disk_crash() -> None:
         concept_id=_Q6_CONCEPT_ID,
         prompt=_Q6_PROMPT,
         golden_answer=_Q6_GOLDEN,
+        required_points=_Q6_POINTS,
         student_answer=(
             "A user posts a reply on a message board but it is gone "
             "because the server crashed and lost the write before it "

@@ -148,6 +148,11 @@ TARGET_FOCUS_THRESHOLD = 0.9
 # An expected_answer shorter than this can't state what a correct answer contains in any
 # usable way — it's a label, not a model answer.
 MIN_EXPECTED_ANSWER_CHARS = 40
+# `required_points` is the minimum bar, and prompt rule 10 asks for usually two to four. More
+# than this and it has stopped being a bar and become a summary of expected_answer — which
+# is the over-strict grading the field exists to prevent. Enumeration questions are exempt:
+# every item in the set is its own point, and a set can legitimately be long.
+MAX_REQUIRED_POINTS = 5
 
 # Prose that defers to context the evaluator never receives. evaluator.py is handed the
 # question, this text, and the student's answer — not the source passage and not the
@@ -157,6 +162,34 @@ _ANSWER_POINTER_RE = re.compile(
     r"|\bas\s+(?:described|stated|shown|mentioned)\s+(?:above|below|earlier|previously)\b",
     re.IGNORECASE,
 )
+
+def _required_points_violations(q: dict, label: str) -> list[str]:
+    """Shapes of `required_points` the evaluator can't grade against as a bar.
+
+    Part of check 4, and deterministic for the same reason: these are structural failures
+    regardless of content. Whether each point is actually *essential* is a judgment call
+    no string check can make; the live eval_geval run is what measures that.
+    """
+    points = [p.strip() for p in q["required_points"] if p.strip()]
+    if not points:
+        return [f"{label}: no required_points — the evaluator falls back to guessing the bar"]
+    violations = []
+    if q["type"] != "enumeration_completeness" and len(points) > MAX_REQUIRED_POINTS:
+        violations.append(
+            f"{label}: {len(points)} required_points (> {MAX_REQUIRED_POINTS}) — a summary "
+            f"of the model answer, not a minimum bar: {points!r}"
+        )
+    for point in points:
+        if _ANSWER_POINTER_RE.search(point):
+            violations.append(
+                f"{label}: required point defers to context the evaluator cannot see: {point!r}"
+            )
+        elif _normalize_ws(point) == _normalize_ws(q["expected_answer"]):
+            violations.append(
+                f"{label}: required point is the whole expected_answer, not one idea: {point!r}"
+            )
+    return violations
+
 
 _EVIDENCE_BASIS_JUDGE_MODEL = "claude-haiku-4-5"
 
@@ -360,12 +393,24 @@ def _target_focus_context(passages: list[SourcePassage]) -> tuple[str, str]:
     The other checks flatten every passage into one blob, which is fine when the question
     is "is this answerable from the evidence". Here the whole question is *which* passage
     the question is about, so the roles have to survive into the prompt.
+
+    A `prerequisite_link` passage goes on the target's side. It carries the prerequisite's
+    name, but it is the chapter's sentence justifying why the *target* depends on that
+    prerequisite, and it is very often the sentence that defines the target ("...storage
+    engines often use additional Bloom filters"; "This effect ... is known as write
+    amplification"). Filed under the neighbour, it made the judge read questions about
+    the target's own definition as questions about the neighbour.
     """
-    target = "\n".join(p["text"] for p in passages if p["role"] == "target_concept")
+    target = "\n".join(
+        p["text"] if p["role"] == "target_concept"
+        else f"[how it relates to {p['concept_name']}] {p['text']}"
+        for p in passages
+        if p["role"] in ("target_concept", "prerequisite_link")
+    )
     neighbours = "\n".join(
         f"[{p['role']}: {p['concept_name']}] {p['text']}"
         for p in passages
-        if p["role"] != "target_concept"
+        if p["role"] not in ("target_concept", "prerequisite_link")
     )
     return target, neighbours
 
@@ -511,6 +556,8 @@ class CaseResult:
                         f"{label}: expected_answer is a verbatim copy of grounding — a "
                         f"source quote, not a model answer: {answer!r}"
                     )
+                    continue
+                violations.extend(_required_points_violations(q, label))
         return violations
 
     def expected_answer_violations_message(self) -> str:
