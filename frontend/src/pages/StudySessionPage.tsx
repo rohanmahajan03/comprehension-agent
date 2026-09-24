@@ -196,7 +196,10 @@ export function StudySessionPage({ docId, sessionId, onExit }: Props) {
   return (
     <div>
       <div className="card">
-        <h2>Tutoring session</h2>
+        <div className="card-header">
+          <h2>Tutoring session</h2>
+          <button onClick={onExit}>Back to Home</button>
+        </div>
         <p>
           Status:{" "}
           {/* No dedicated "active" style — active reuses the "correct" (positive/green)
@@ -209,7 +212,6 @@ export function StudySessionPage({ docId, sessionId, onExit }: Props) {
           · Current concept:{" "}
           <strong>{conceptName(studySession.current_concept_id)}</strong>
         </p>
-        <button onClick={onExit}>Back to Home</button>
         {/* The chapter's structure, coloured by what this session has shown. The page
             already fetched this graph for `conceptName`; until now it was never drawn. */}
         {visibleGraph && states && visibleGraph.concepts.length > 0 && (

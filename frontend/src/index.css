@@ -85,6 +85,18 @@ button:disabled {
   margin: 1rem 0;
 }
 
+/* A card's title with an action pinned to its top-right corner. */
+.card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+}
+
+.card-header h2 {
+  margin: 0;
+}
+
 .error {
   color: #b3261e;
 }

@@ -20,9 +20,10 @@ interface Props {
   docId: string
   onStartStudySession: () => void
   onResumeStudySession: (session: StudySessionSummary) => void
+  onExit: () => void
 }
 
-export function GraphView({ docId, onStartStudySession, onResumeStudySession }: Props) {
+export function GraphView({ docId, onStartStudySession, onResumeStudySession, onExit }: Props) {
   const [graph, setGraph] = useState<DependencyGraph | null>(null)
   const [selected, setSelected] = useState<Concept | null>(null)
   const [questions, setQuestions] = useState<Question[] | null>(null)
@@ -100,7 +101,10 @@ export function GraphView({ docId, onStartStudySession, onResumeStudySession }: 
   return (
     <div>
       <div className="card">
-        <h2>Dependency graph</h2>
+        <div className="card-header">
+          <h2>Dependency graph</h2>
+          <button onClick={onExit}>Back to Home</button>
+        </div>
         <p>
           Arrows point from prerequisite to dependent concept. Click a concept to preview
           its generated questions, or start a tutoring session.

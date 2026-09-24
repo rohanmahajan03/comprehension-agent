@@ -65,6 +65,7 @@ export default function App() {
             setPage('session')
           }}
           onResumeStudySession={resume}
+          onExit={() => setPage('menu')}
         />
       )}
       {page === 'session' && docId && (
