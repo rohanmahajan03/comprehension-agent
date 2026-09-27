@@ -39,6 +39,13 @@ _QUESTION_TYPES = [
     "applied_reasoning",
 ]
 
+# Types that ask the student to carry the target into a comparison or a new scenario, so
+# they need more of the target's own evidence than a definition does. Offered only when the
+# target has more than `_THIN_EVIDENCE_PASSAGES` passages of its own; see
+# allowed_question_types().
+_RELATIONAL_TYPES = frozenset({"conceptual_distinction", "applied_reasoning"})
+_THIN_EVIDENCE_PASSAGES = 2
+
 _SYSTEM_PROMPT = """You are an expert tutor generating assessment questions for a single concept from a textbook.
 
 ## Your task
@@ -50,6 +57,7 @@ evidence text — do not draw on general knowledge beyond what is stated.
 ## Context you will receive
 
 - target_concept: the concept being assessed (id and name)
+- question_types: the question types you may use for this concept
 - sources: every evidence passage you may draw on, each with a stable `id`, its `text`,
   and a `role` saying how it relates to the target concept:
     - target_concept — the target concept's own evidence
@@ -62,6 +70,8 @@ evidence text — do not draw on general knowledge beyond what is stated.
 
 Assess whether each type is appropriate given the context provided. Only generate a
 question if the type genuinely fits — it is better to skip a type than to force one.
+Use only the types listed in the input's `question_types`; any others have been ruled
+out for this concept.
 
 1. conceptual_correctness — ask the student to precisely explain the target concept
    Appropriate for: any concept with sufficient explanatory evidence
@@ -161,36 +171,40 @@ Return only valid JSON. No preamble, no explanation, no markdown fences.
 ## Input
 
 target_concept: {target_concept}
+question_types: {question_types}
 sources: {sources}"""
 
-_OUTPUT_SCHEMA = {
-    "type": "json_schema",
-    "schema": {
-        "type": "object",
-        "properties": {
-            "concept_id": {"type": "string"},
-            "questions": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "type": {"type": "string", "enum": _QUESTION_TYPES},
-                        "question": {"type": "string"},
-                        "expected_answer": {"type": "string"},
-                        "required_points": {"type": "array", "items": {"type": "string"}},
-                        "source_ids": {"type": "array", "items": {"type": "string"}},
+def _output_schema(question_types: list[str]) -> dict:
+    """The response schema, with `type` limited to the types offered for this concept, so
+    a ruled-out type cannot come back even if the model ignores the prompt."""
+    return {
+        "type": "json_schema",
+        "schema": {
+            "type": "object",
+            "properties": {
+                "concept_id": {"type": "string"},
+                "questions": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "type": {"type": "string", "enum": question_types},
+                            "question": {"type": "string"},
+                            "expected_answer": {"type": "string"},
+                            "required_points": {"type": "array", "items": {"type": "string"}},
+                            "source_ids": {"type": "array", "items": {"type": "string"}},
+                        },
+                        "required": [
+                            "type", "question", "expected_answer", "required_points", "source_ids",
+                        ],
+                        "additionalProperties": False,
                     },
-                    "required": [
-                        "type", "question", "expected_answer", "required_points", "source_ids",
-                    ],
-                    "additionalProperties": False,
                 },
             },
+            "required": ["concept_id", "questions"],
+            "additionalProperties": False,
         },
-        "required": ["concept_id", "questions"],
-        "additionalProperties": False,
-    },
-}
+    }
 
 
 def format_answer_notes(expected_answer: str, grounding: str) -> str:
@@ -274,6 +288,31 @@ def source_passages(
     return passages
 
 
+def allowed_question_types(passages: list[SourcePassage]) -> list[str]:
+    """The question types the model may write for a concept, given its evidence passages.
+
+    Drops the relational types when the target's own evidence is thin: its summary plus at
+    most one more passage of its own (a chapter quote, or the sentence justifying one of
+    its prerequisites). With that little, a comparison or scenario question has to be
+    answered from the neighbours' passages or from outside knowledge — and so does its
+    expected_answer — which is where tests/question_geval's off-target and ungrounded
+    questions concentrated.
+
+    Enforced here rather than in the prompt: a prompt rule asking the model to scale its
+    question set to thin evidence was tried and reverted. It cut the example and scenario
+    questions of richer concepts, kept the distinction questions it was aimed at, and left
+    Bloom filter's set untouched.
+
+    Counts passages rather than characters because a character threshold sat on a knife
+    edge between concepts that behave differently (Case 3's bloom_filter at 441 characters,
+    sstable at 458). The cost is that one long quote counts the same as one short one.
+    """
+    own = sum(1 for p in passages if p["role"] in ("target_concept", "prerequisite_link"))
+    if own > _THIN_EVIDENCE_PASSAGES:
+        return list(_QUESTION_TYPES)
+    return [t for t in _QUESTION_TYPES if t not in _RELATIONAL_TYPES]
+
+
 def _siblings_of(target: Concept, graph: DependencyGraph) -> list[Concept]:
     """Concepts at the same level as `target`: those sharing at least one direct
     parent (prerequisite) with it. Concepts with no prerequisites of their own have
@@ -299,8 +338,10 @@ def _generate_raw_for_concept(concept: Concept, by_id: dict[str, Concept], graph
     """
     passages = source_passages(concept, by_id, graph)
     text_by_id = {p["id"]: p["text"] for p in passages}
+    question_types = allowed_question_types(passages)
     payload = {
         "target_concept": {"id": concept.id, "name": concept.name},
+        "question_types": question_types,
         "sources": passages,
     }
     response = _client().messages.create(
@@ -309,7 +350,7 @@ def _generate_raw_for_concept(concept: Concept, by_id: dict[str, Concept], graph
         temperature=0,
         system=_SYSTEM_PROMPT,
         messages=[{"role": "user", "content": json.dumps(payload)}],
-        output_config={"format": _OUTPUT_SCHEMA},
+        output_config={"format": _output_schema(question_types)},
     )
     text = next(block.text for block in response.content if block.type == "text")
     questions: list[RawQuestion] = json.loads(text)["questions"]

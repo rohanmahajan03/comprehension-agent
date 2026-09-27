@@ -7,7 +7,7 @@ added (docs/specs/2026-09-13-concept-evidence-generation.md §5).
 """
 
 from app.models import Concept, DependencyGraph
-from app.services.question_generator import source_passages
+from app.services.question_generator import allowed_question_types, source_passages
 
 
 def _graph(*concepts: Concept) -> tuple[Concept, dict[str, Concept], DependencyGraph]:
@@ -84,3 +84,33 @@ def test_an_empty_quote_is_skipped_like_an_empty_edge_evidence_entry() -> None:
         "A is a thing.",
         "Real quote.",
     ]
+
+
+_RELATIONAL = {"conceptual_distinction", "applied_reasoning"}
+
+
+def test_thin_target_evidence_rules_out_the_relational_types() -> None:
+    """Summary plus one justifying quote is thin: rich prerequisite passages don't count,
+    since they are the neighbour's evidence, not the target's."""
+    a = Concept(
+        id="d:a", name="A", summary="A is a thing.",
+        depends_on=["d:b"], evidence={"d:b": "A builds on B."},
+    )
+    b = Concept(id="d:b", name="B", summary="B is a long, detailed, well-explained thing. " * 20)
+    concept, by_id, graph = _graph(a, b)
+
+    types = allowed_question_types(source_passages(concept, by_id, graph))
+
+    assert _RELATIONAL.isdisjoint(types)
+    assert "conceptual_correctness" in types
+
+
+def test_a_third_passage_of_its_own_offers_every_type() -> None:
+    concept, by_id, graph = _graph(
+        Concept(id="d:a", name="A", summary="A is a thing.",
+                source_quotes=["A works by doing X.", "A is used when Y."])
+    )
+
+    types = allowed_question_types(source_passages(concept, by_id, graph))
+
+    assert _RELATIONAL <= set(types)
