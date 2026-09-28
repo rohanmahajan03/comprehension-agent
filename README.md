@@ -10,7 +10,7 @@ Diagnosing EXACTLY what you don't understand from your reading — an adaptive t
 
 Upload textbook chapter → build dependency graph (extract concepts and prerequisite links) → generate a question set per concept node.
 
-Implemented as: `POST /api/textbook` → `services/graph_builder.py` → `services/question_generator.py`, all synchronous for now. Both are real: `graph_builder.py` calls Claude (`claude-haiku-4-5`) to extract concepts and prerequisite edges from the chapter text, grounding every edge in a verbatim quote and dropping any edge that would introduce a cycle. `question_generator.py` calls Claude (`claude-sonnet-4-6`) once per concept to generate a set of evidence-grounded questions from a fixed taxonomy (conceptual correctness, conceptual distinction, enumeration completeness, open-ended example, applied reasoning), skipping any type that doesn't genuinely fit the concept. Each question carries a full model answer plus a short list of **required points** — the minimum a passing answer must express — which is what the evaluator actually grades against. Both need a valid `LLM_API_KEY` in `.env` (see Prerequisites).
+Implemented as: `POST /api/textbook` → `services/graph_builder.py` → `services/question_generator.py`, all synchronous for now. Both are real: `graph_builder.py` calls Claude (`claude-haiku-4-5`) to extract concepts and prerequisite edges from the chapter text, grounding every edge in a verbatim quote and dropping any edge that would introduce a cycle. `question_generator.py` calls Claude (`claude-sonnet-4-6`) once per concept to generate a set of evidence-grounded questions from a fixed taxonomy (conceptual correctness, conceptual distinction, enumeration completeness, open-ended example, applied reasoning), skipping any type that doesn't genuinely fit the concept. Each question carries a full model answer plus a short list of **required points** — the minimum a passing answer must express — which is what the evaluator actually grades against. Concepts with little evidence of their own (a summary plus at most one more passage) are only offered the simpler question types: distinction and applied-reasoning questions are ruled out in code, since on thin evidence they end up answered from neighbouring concepts or outside knowledge. Both need a valid `LLM_API_KEY` in `.env` (see Prerequisites).
 
 ### Reviewing the graph before questions are generated (optional)
 
@@ -101,12 +101,13 @@ Free and deterministic — all five LLM services are stubbed for these via autou
 
 `backend/tests/test_postgres_store.py` is also free (no LLM calls) but needs a real Postgres instance, so it auto-skips unless `TEST_DATABASE_URL` is set — see `CLAUDE.md` for the exact setup (it truncates its tables before every test, so it's pointed at a dedicated `_test`-suffixed database, never the working one).
 
-There are also five live regression suites (using [DeepEval](https://github.com/confident-ai/deepeval)) that exercise the real LLM calls end-to-end and make real, **billed** Anthropic API calls, so none of them run as part of the default `pytest` — each auto-skips without an `LLM_API_KEY`:
+There are also six live regression suites (using [DeepEval](https://github.com/confident-ai/deepeval)) that exercise the real LLM calls end-to-end and make real, **billed** Anthropic API calls, so none of them run as part of the default `pytest` — each auto-skips without an `LLM_API_KEY`:
 
 - `backend/tests/eval_geval/` — grades `evaluator.evaluate()` against 10 questions / 42 answer variants (~$0.35–0.45, ~5-6 minutes per full run)
 - `backend/tests/graph_geval/` — grades `graph_builder.build_graph()`'s extracted concepts/edges against a golden set (`tests/graph_golden_set.md`), using a judge LLM call for concept alignment
 - `backend/tests/question_geval/` — grades `question_generator.generate_questions()`'s output against a golden set: source citation, whether questions are answerable from the evidence, whether each model answer is gradeable and correct, and whether questions stay on their target concept rather than a neighbour
 - `backend/tests/diagnoser_geval/` — grades `diagnoser.py`'s agentic loop against 9 hand-authored diagnosis cases: suspect accuracy by hop depth, zero-tolerance invariants (no answer leaks into the targeted question), and two judged checks on question relevance and reasoning quality
+- `backend/tests/points_geval/` — has the question generator write required points for `eval_geval`'s 10 questions, grades all 42 answers against them with the real evaluator, and checks each verdict against a ruled answer key (`rulings.py`). No judge model; it's what says whether real grading matches the handwritten-points ideal `eval_geval` measures
 - `backend/tests/evidence_geval/` — grades `evidence_finder.py` against hand-labelled chapter spans: whether each quote is verbatim and actually about the concept, and that it finds nothing for concepts the chapter doesn't cover (the cheapest suite — Haiku only)
 
 To run any of them:
@@ -114,7 +115,7 @@ To run any of them:
 ```bash
 cd backend
 set -a && source ../.env && set +a
-.venv/bin/pytest tests/eval_geval -v            # or tests/graph_geval, tests/question_geval, tests/diagnoser_geval, tests/evidence_geval
+.venv/bin/pytest tests/eval_geval -v            # or tests/points_geval, tests/graph_geval, tests/question_geval, tests/diagnoser_geval, tests/evidence_geval
 ```
 
 ## Running frontend tests
