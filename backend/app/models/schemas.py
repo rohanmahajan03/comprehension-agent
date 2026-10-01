@@ -26,8 +26,8 @@ class Question(BaseModel):
             "The minimum an answer must express to be marked correct, one idea per entry. "
             "`expected_answer_notes` is a complete model answer and deliberately more than a "
             "passing answer needs; these points are the bar. Empty for questions written "
-            "before the field existed and for diagnostic questions, which the evaluator "
-            "grades against the model answer alone."
+            "before the field existed and for diagnostic questions; for those the evaluator "
+            "identifies the points itself from the question."
         ),
     )
 
