@@ -9,6 +9,7 @@ from .support import (
     ANSWER_QUALITY_THRESHOLD,
     EVIDENCE_BASIS_THRESHOLD,
     TARGET_FOCUS_THRESHOLD,
+    judge_case_points,
     score_case,
 )
 
@@ -57,3 +58,11 @@ def test_case3_questions_assess_their_own_concept() -> None:
     """
     result = score_case()
     assert result.target_focus_rate >= TARGET_FOCUS_THRESHOLD, result.target_focus_message()
+
+
+def test_case3_required_points_bar() -> None:
+    """Report-only (check 7): runs the points judge so the terminal summary can print
+    where each question's bar sits. No rate is asserted until the judge is calibrated —
+    see judge_case_points(). judge_points() raising on a misaligned response is the only
+    failure this can produce."""
+    judge_case_points()

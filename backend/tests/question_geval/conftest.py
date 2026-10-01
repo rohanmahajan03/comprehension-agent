@@ -41,7 +41,7 @@ def pytest_terminal_summary(terminalreporter: pytest.TerminalReporter) -> None:
     Reads `score_case`'s cache rather than calling it, so this never triggers API calls
     of its own and stays silent when the suite was skipped.
     """
-    from .support import score_case
+    from .support import POINTS_BAR_JUDGMENTS, score_case
 
     if score_case.cache_info().currsize == 0:
         return  # suite skipped (no credentials) — nothing was scored
@@ -85,3 +85,25 @@ def pytest_terminal_summary(terminalreporter: pytest.TerminalReporter) -> None:
         terminalreporter.write_line(
             f"  off-target: {j.concept_id} [{j.question['type']}] {j.question['question'][:70]}…"
         )
+
+    # Check 7, report-only until the points judge is calibrated (see judge_case_points).
+    if POINTS_BAR_JUDGMENTS:
+        judged = [p.judgment for p in POINTS_BAR_JUDGMENTS]
+        sound = sum(1 for j in judged if j.sound)
+        over = sum(1 for j in judged if j.over_requires)
+        under = sum(1 for j in judged if j.under_requires)
+        terminalreporter.write_line(
+            f"points bar:           {sound}/{len(judged)} sound, {over} over-require, "
+            f"{under} under-require (unasserted)"
+        )
+        for p in POINTS_BAR_JUDGMENTS:
+            for i in p.judgment.inessential:
+                terminalreporter.write_line(
+                    f"  inessential point: {p.concept_id} [{p.question['type']}] "
+                    f"{p.question['required_points'][i][:70]}…"
+                )
+            if p.judgment.under_requires:
+                missing = "; ".join(p.judgment.missing) or "(none named)"
+                terminalreporter.write_line(
+                    f"  bar too low: {p.concept_id} [{p.question['type']}] missing {missing[:90]}"
+                )

@@ -54,6 +54,10 @@ class RuledAnswer:
     prompt: str
     question_type: str
     model_answer: str
+    # eval_geval's handwritten points, taken from the numbered items of the question's
+    # G-Eval criterion — the bar the rulings were made against. The points judge's
+    # calibration starts from these (see calibration.py).
+    handwritten_points: tuple[str, ...]
     student_answer: str
     expected_correct: bool
     explicit: bool  # decided case by case rather than read off a variant label
@@ -95,6 +99,7 @@ def collect_ruled_answers() -> tuple[RuledAnswer, ...]:
                         prompt=recorded["prompt"],
                         question_type=QUESTION_TYPES[recorded["question_id"]],
                         model_answer=recorded["golden_answer"],
+                        handwritten_points=tuple(recorded["required_points"]),
                         student_answer=recorded["student_answer"],
                         expected_correct=VERDICTS[name],
                         explicit=name in EXPLICIT_RULINGS,

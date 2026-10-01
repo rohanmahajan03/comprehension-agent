@@ -71,6 +71,12 @@ unusable rubric, and until these existed nothing tested that half of the output:
    the correct answer is the student's own), and closely restating the evidence is
    right for conceptual_correctness (where the ideal answer largely is that).
 
+Check 7 (report-only, `tests/points_geval/judge.py`, `claude-opus-4-5`) asks whether
+each question's `required_points` sit at the right bar — no inessential point that
+fails a good answer, no gap that passes a weak one. points_geval measures that exactly,
+but only for its 10 ruled questions; these have no rulings. Not asserted until the
+judge's calibration against those rulings has run — see `judge_case_points()`.
+
 Check 6 covers *which concept* a question is about, which nothing else here does:
 
 6. Target focus (LLM-judged, `claude-haiku-4-5`) — does the question assess the concept it
@@ -129,6 +135,8 @@ from app.config import get_settings
 from app.models import DependencyGraph
 from app.services import question_generator
 from app.services.question_generator import RawQuestion, SourcePassage, source_passages
+
+from tests.points_geval.judge import PointsJudgment, judge_points
 
 from .golden import CASE_3_QUESTIONS, QuestionGoldenCase
 
@@ -706,3 +714,42 @@ def score_case() -> CaseResult:
         answer_quality_judgments=answer_quality_judgments,
         target_focus_judgments=target_focus_judgments,
     )
+
+
+@dataclass(frozen=True)
+class PointsBarJudgment:
+    concept_id: str
+    question: RawQuestion
+    judgment: PointsJudgment
+
+
+# A plain dict for the same reason as points_geval's judgment caches: the terminal summary
+# reports what a run judged and must never make calls of its own.
+POINTS_BAR_JUDGMENTS: list[PointsBarJudgment] = []
+
+
+def judge_case_points() -> list[PointsBarJudgment]:
+    """Check 7 — the points judge over every generated question that has points.
+
+    Report-only until the judge is calibrated against points_geval's rulings
+    (tests/points_geval/test_judge_calibration.py). These questions have no ruled
+    answers, so this judge is the only measure of where their bar sits; asserting a
+    rate before knowing how often the judge itself is wrong would make the suite's
+    verdict the judge's error rate.
+    """
+    if not POINTS_BAR_JUDGMENTS:
+        for concept_id, questions in score_case().raw_by_concept.items():
+            for q in questions:
+                if not q["required_points"]:
+                    continue  # check 4 already reports a question with no points
+                POINTS_BAR_JUDGMENTS.append(
+                    PointsBarJudgment(
+                        concept_id,
+                        q,
+                        judge_points(
+                            q["type"], q["question"], q["expected_answer"],
+                            tuple(q["required_points"]),
+                        ),
+                    )
+                )
+    return POINTS_BAR_JUDGMENTS
