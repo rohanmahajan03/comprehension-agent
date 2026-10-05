@@ -105,9 +105,9 @@ There are also six live regression suites (using [DeepEval](https://github.com/c
 
 - `backend/tests/eval_geval/` — grades `evaluator.evaluate()` against 10 questions / 42 answer variants (~$0.35–0.45, ~5-6 minutes per full run)
 - `backend/tests/graph_geval/` — grades `graph_builder.build_graph()`'s extracted concepts/edges against a golden set (`tests/graph_golden_set.md`), using a judge LLM call for concept alignment
-- `backend/tests/question_geval/` — grades `question_generator.generate_questions()`'s output against a golden set: source citation, whether questions are answerable from the evidence, whether each model answer is gradeable and correct, and whether questions stay on their target concept rather than a neighbour
+- `backend/tests/question_geval/` — grades `question_generator.generate_questions()`'s output against a golden set: source citation, whether questions are answerable from the evidence, whether each model answer is gradeable and correct, and whether questions stay on their target concept rather than a neighbour. It also runs the points judge (below) over every generated question's required points, report-only until that judge passes calibration
 - `backend/tests/diagnoser_geval/` — grades `diagnoser.py`'s agentic loop against 9 hand-authored diagnosis cases: suspect accuracy by hop depth, zero-tolerance invariants (no answer leaks into the targeted question), and two judged checks on question relevance and reasoning quality
-- `backend/tests/points_geval/` — has the question generator write required points for `eval_geval`'s 10 questions, grades all 42 answers against them with the real evaluator, and checks each verdict against a ruled answer key (`rulings.py`). No judge model; it's what says whether real grading matches the handwritten-points ideal `eval_geval` measures
+- `backend/tests/points_geval/` — has the question generator write required points for `eval_geval`'s 10 questions, grades all 42 answers against them with the real evaluator, and checks each verdict against a ruled answer key (`rulings.py`). No judge model in that check; it's what says whether real grading matches the handwritten-points ideal `eval_geval` measures. The same directory holds the **points judge** (`judge.py`, Claude Opus), which reads a question's required points directly and asks whether each is essential and whether the set is a high enough bar, so it can cover generated questions that have no ruled answers. It's calibrated against 29 fixtures built by perturbing `eval_geval`'s handwritten points in known directions (`calibration.py`). First calibration: 9/10 good point sets accepted, 9/10 too-low bars caught, 6/9 over-requiring points caught (failing, because it misses points that bundle an optional idea in with an essential one)
 - `backend/tests/evidence_geval/` — grades `evidence_finder.py` against hand-labelled chapter spans: whether each quote is verbatim and actually about the concept, and that it finds nothing for concepts the chapter doesn't cover (the cheapest suite — Haiku only)
 
 To run any of them:
@@ -116,6 +116,7 @@ To run any of them:
 cd backend
 set -a && source ../.env && set +a
 .venv/bin/pytest tests/eval_geval -v            # or tests/points_geval, tests/graph_geval, tests/question_geval, tests/diagnoser_geval, tests/evidence_geval
+.venv/bin/pytest tests/points_geval/test_judge_calibration.py -k "not generated" -v   # points judge calibration alone (~29 Opus calls)
 ```
 
 ## Running frontend tests
