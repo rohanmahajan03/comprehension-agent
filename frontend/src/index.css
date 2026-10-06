@@ -77,6 +77,36 @@ button:disabled {
   cursor: not-allowed;
 }
 
+/* A button waiting on a model call: the spinner sits beside the label, and the button
+   lays them out inline. Drawn in currentColor so it follows the button's text. */
+.button-busy {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.spinner {
+  width: 1em;
+  height: 1em;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Slowed rather than stopped: a frozen spinner reads as a hung page. */
+@media (prefers-reduced-motion: reduce) {
+  .spinner {
+    animation-duration: 2.4s;
+  }
+}
+
 .card {
   background: white;
   border: 1px solid #e3e3ee;

@@ -30,7 +30,13 @@ export function QuestionCard({ question, onSubmit, submitting }: Props) {
         onChange={(e) => setText(e.target.value)}
       />
       <p>
-        <button onClick={submit} disabled={submitting || !text.trim()}>
+        <button
+          className={submitting ? 'button-busy' : undefined}
+          onClick={submit}
+          disabled={submitting || !text.trim()}
+          aria-busy={submitting}
+        >
+          {submitting && <span className="spinner" aria-hidden="true" />}
           {submitting ? 'Evaluating…' : 'Submit answer'}
         </button>
       </p>
