@@ -168,3 +168,13 @@ The fifth is shaped differently:
 - `backend/app/services/diagnoser.py` — not a single structured call but a bounded agentic tool-calling loop over Claude (`claude-sonnet-4-6`) that walks prerequisites, checks for a reusable question, and generates a new targeted one, gated by a code-enforced certainty check (design doc: `docs/specs/2026-08-10-diagnoser-agentic-pipeline-design.md`)
 
 Storage lives behind the `Store` abstract class (`backend/app/store/memory_store.py`): `InMemoryStore` by default, or `PostgresStore` (`backend/app/store/postgres_store.py`) when `DATABASE_URL` is set — `get_store()` picks between them, so nothing else in the app needs to know which backend is active (design doc: `docs/specs/2026-08-21-persistent-storage-design.md`).
+
+## TODO
+
+### Distributed deployment on Kubernetes
+
+Not started. Today the app runs as a single backend, a frontend and one Postgres instance via Docker Compose. The goal is to deploy it across a Kubernetes cluster instead. Details are still open.
+
+### Further CI/CD configuration
+
+Not started. CI (`.github/workflows/ci.yml`) currently runs the backend tests against a fresh Postgres, plus the frontend unit tests and build, on pushes to `main` and on pull requests. There's no CD yet: nothing builds or publishes images, and nothing deploys. The goal is to extend the pipeline toward that, alongside the Kubernetes work above. Details are still open.
