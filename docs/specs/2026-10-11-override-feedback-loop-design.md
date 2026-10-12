@@ -1,6 +1,6 @@
 # Closing the loop on answer overrides: triage, regression cases, and one measured fix
 
-**Status: steps 0–2 BUILT 2026-10-11** (§8). Steps 3+ wait on a pilot with real users.
+**Status: steps 0–2 BUILT 2026-10-11** (§8).
 
 ### What shipped
 
@@ -71,9 +71,8 @@ These limits shape every later section, so they come first.
   Some overrides will be wrong: the student really did miss a required point. Those are as
   valuable as the right ones (§5), but only after a human has ruled on them. An LLM triage
   pass proposes; it never decides.
-- **It may be nearly empty.** There have been no real users so far. §7 deals with cold
-  start. The pipeline can be built and tested against seeded rows, but the *demonstration*
-  needs real overrides. Synthetic ones prove the plumbing works, not that the loop does.
+- **It may be small.** §7 covers where overrides come from. Synthetic seeds prove the
+  plumbing works, not that the loop does, so they never enter a reported number.
 
 ## 3. Stage 0: close the snapshot gap
 
@@ -118,7 +117,7 @@ taxonomy, and "clusters" are just the counts per label.
 
 `points_overreach` is listed first on purpose. `points_geval`'s first run found all three
 of its misses over-requiring, with bundled points as the main pattern. The prediction is that
-real overrides will show the same thing. If they don't, that's a finding in its own right.
+the override corpus will show the same thing. If they don't, that's a finding in its own right.
 
 ### Mechanics
 
@@ -171,8 +170,7 @@ evaluator.
   the snapshot fields, the confirmed category and component, and the **expected verdict**.
 - **Every confirmed ruling becomes a case, in both directions.** A confirmed misgrade
   expects `correct: true`. A confirmed `override_invalid` expects `correct: false`. That
-  second set is the only real-user evidence the project will ever have about *where the
-  bar should stay*, and it's the in-corpus counterweight to §2's leniency drift. Treat it as
+  second set is the only evidence from actual use about *where the bar should stay*, and it's the in-corpus counterweight to §2's leniency drift. Treat it as
   equally important.
 - Test parametrization by case id. A case whose component is `evaluator` grades against its
   **snapshotted** `required_points` (the rubric is held fixed, the evaluator is under test).
@@ -196,7 +194,7 @@ evaluator.
 
 `cases.jsonl` holds real student answers and notes, copied into a repository. Before
 committing any real case: anonymize (`study_session_id` → hash, drop `created_at`), and
-**get permission from whoever wrote it** (§7's pilot is the natural place to ask). If
+**get permission from whoever wrote it**. If
 permission isn't given, keep `cases.jsonl` gitignored and commit only the aggregate numbers.
 The suite has to work either way; this decides what's public, not what's measured.
 
@@ -229,17 +227,21 @@ finding worth writing up, not one to hide.
 half an hour per candidate. Iterate with a `probe case <override_id>` command (same pattern
 as the diagnoser and evidence probes) and run the full gate only on a finalist.
 
-## 7. Cold start: getting real overrides
+## 7. Where overrides come from
 
-The loop is only convincing on real data, and the corpus is probably near empty. Plan:
+Target **~30 overrides**: fewer and the `holdout` split is too small to say anything. Any
+source works as long as the questions and grades come from the real pipeline. Run with
+`DATABASE_URL` set so overrides persist (`InMemoryStore` loses them on restart).
 
-- **Pilot.** 5–10 students, one or two chapters they're actually studying, `DATABASE_URL`
-  set so overrides persist (`InMemoryStore` loses them on restart). This needs a deployed
-  instance; there's no auth, so share it privately. Ask for case-promotion permission (§5)
-  up front. Target **~30 overrides**: fewer and the `holdout` split is too small to say
-  anything.
-- **Stage 0 must ship before the pilot.** Overrides captured without `required_points` can
-  be triaged but not reproduced.
+- **The existing rows.** Overrides already in the database predate Stage 0, so they have
+  no recorded `required_points`. They can still be graded in `regenerated` mode once the
+  reviewer sets a question type, or backfilled from `questions.required_points` via the
+  soft `question_id` wherever that question still exists.
+- **Studying with it.** Upload chapters being studied, answer honestly, and dispute grades
+  that look wrong.
+- **Simulated students.** Have a model answer generated questions at varied quality and
+  phrasing, run the real evaluator, and file overrides on the grades a human disagrees
+  with. The write-up should name the source.
 - **Seed rows for development only.** Build and test triage/promotion against a handful of
   synthetic overrides generated from `points_geval`'s observed misses (its first run gave
   three real over-requiring cases on real generated points). Mark them `synthetic: true` in
@@ -252,13 +254,13 @@ The loop is only convincing on real data, and the corpus is probably near empty.
 | 0. snapshot migration + tests | free | — |
 | 1. `override_geval` suite + wiring test, against seeded cases | free (wiring) | 0 |
 | 2. triage `propose`/`review`/`promote` + calibration fixtures | ~10 Opus calls | 0 |
-| 3. pilot, collect ~30 overrides | — | 0 deployed |
+| 3. collect ~30 overrides (§7) | depends on source | 0 |
 | 4. triage the real corpus | ~30 Opus calls + human time | 2, 3 |
 | 5. baseline: all three suites ×3 | ~$1.50, ~30 min | 1, 4 |
 | 6. one fix + gate | ~30 min per candidate | 5 |
 | 7. write-up: triage distribution, before/after table, triage agreement rate | — | 6 |
 
-Steps 0–2 can be done now. Everything after step 3 waits on users.
+Steps 0–2 are built.
 
 ## 9. Out of scope
 
@@ -269,7 +271,7 @@ Steps 0–2 can be done now. Everything after step 3 waits on users.
 - **The lenient direction from live traffic.** The real fix for §2's blind spot is an
   online audit: sample a few percent of *passing* grades and have a judge flag likely false
   positives. That's the natural next design after this one, and it reuses the triage
-  taxonomy. It's left out here because it needs volume the pilot won't have.
+  taxonomy. It's left out here because it needs more grading volume than this corpus will have.
 - **Diagnostic probes as `points_overreach`.** Probes have no `required_points`, so a
   misgraded probe is either `paraphrase_missed` or `probe_unanswerable`. Teaching
   `diagnoser.py` to write points is its own change.
