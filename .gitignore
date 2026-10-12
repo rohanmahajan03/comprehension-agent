@@ -15,6 +15,11 @@ dist/
 .deepeval/
 .deepeval_telemetry.txt
 
+# Triaged answer overrides (backend/tests/override_corpus): real student writing. Commit
+# cases.jsonl only with its writers' permission — see
+# docs/specs/2026-10-11-override-feedback-loop-design.md §5.
+backend/tests/override_corpus/data/
+
 # Playwright MCP tool output (screenshots/snapshots from browser-automation sessions)
 .playwright-mcp/
 

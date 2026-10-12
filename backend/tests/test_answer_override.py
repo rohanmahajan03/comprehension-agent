@@ -9,6 +9,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
+from app.models import Question
+from app.services import evaluator
 from app.store import get_store
 
 client = TestClient(app)
@@ -91,6 +93,31 @@ def test_override_after_a_wrong_answer_advances_and_records_a_snapshot(
     assert override.student_answer == "an answer the grader disliked"
     assert override.evaluator_explanation == result["evaluation"]["explanation"]
     assert override.student_note == "the rubric wanted an example"
+    # The grading snapshot (docs/specs/2026-10-11-override-feedback-loop-design.md §3).
+    assert override.required_points == question["required_points"]
+    assert override.evaluator_model == evaluator.MODEL
+    assert override.question_kind == "pipeline1"
+
+
+def test_override_snapshots_the_required_points_actually_graded_against(
+    wrong_first_answer: list[bool],
+) -> None:
+    """The stub generator writes no points, so the happy path above can only show `[]`
+    surviving; this pins that real points reach the row verbatim. They are the rubric the
+    evaluator grades against, and the one thing a misgrade can't be reproduced without
+    (docs/specs/2026-10-11-override-feedback-loop-design.md §3)."""
+    doc_id = _upload_chapter()
+    session = _start(doc_id)
+    concept_id = session["current_concept_id"]
+    questions = [Question(**q) for q in client.get(f"/api/questions/{concept_id}").json()]
+    points = ["A limit is the value a function approaches.", "It need not equal f(a)."]
+    questions[0] = questions[0].model_copy(update={"required_points": points})
+    get_store().save_questions(concept_id, questions)
+
+    _answer(session["id"], questions[0].id)
+    assert _override(session["id"], questions[0].id).status_code == 200
+
+    assert _overrides_for(session["id"])[0].required_points == points
 
 
 def test_override_of_a_diagnostic_returns_to_the_concept_that_failed(
@@ -135,6 +162,10 @@ def test_override_of_a_diagnostic_returns_to_the_concept_that_failed(
     override = _overrides_for(session["id"])[0]
     assert override.question_id == diagnostic["id"]
     assert override.concept_id == diagnostic["concept_id"]
+    assert override.question_kind == "diagnostic"
+    assert override.required_points == [], (
+        "a probe has no points of its own; [] says the evaluator chose them, not 'unknown'"
+    )
     assert override.concept_id != failed_concept, (
         "the probe must be on a real prerequisite — otherwise this test would pass "
         "without exercising the diagnostic branch at all"

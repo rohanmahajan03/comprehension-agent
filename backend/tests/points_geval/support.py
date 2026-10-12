@@ -140,9 +140,15 @@ def points_system_prompt() -> str:
 def generate_points(question_id: str) -> tuple[str, ...]:
     """Required points for one question, from question_generator's model and settings."""
     answer = next(a for a in collect_ruled_answers() if a.question_id == question_id)
-    user = json.dumps(
-        {"type": answer.question_type, "question": answer.prompt, "expected_answer": answer.model_answer}
-    )
+    return write_points(answer.question_type, answer.prompt, answer.model_answer)
+
+
+@lru_cache
+def write_points(question_type: str, prompt: str, model_answer: str) -> tuple[str, ...]:
+    """Required points for any question, not just a ruled one — tests/override_geval
+    regenerates points for real overrides through this, so the two suites can't drift on
+    how points are written."""
+    user = json.dumps({"type": question_type, "question": prompt, "expected_answer": model_answer})
     response = question_generator._client().messages.create(
         model=question_generator._MODEL,
         max_tokens=1024,

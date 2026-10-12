@@ -469,6 +469,9 @@ class PostgresStore(Store):
                     student_answer=override.student_answer,
                     evaluator_explanation=override.evaluator_explanation,
                     student_note=override.student_note,
+                    required_points=override.required_points,
+                    evaluator_model=override.evaluator_model,
+                    question_kind=override.question_kind,
                     created_at=override.created_at,
                 )
                 .on_conflict_do_nothing(index_elements=["study_session_id", "history_seq"])
@@ -493,6 +496,9 @@ class PostgresStore(Store):
                     student_answer=r.student_answer,
                     evaluator_explanation=r.evaluator_explanation,
                     student_note=r.student_note,
+                    required_points=r.required_points,
+                    evaluator_model=r.evaluator_model,
+                    question_kind=r.question_kind,
                     created_at=r.created_at,
                 )
                 for r in rows

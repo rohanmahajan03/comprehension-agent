@@ -5,6 +5,7 @@ Keep the two in sync when changing anything here.
 
 from datetime import UTC, datetime
 from enum import Enum
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -165,6 +166,24 @@ class AnswerOverride(BaseModel):
         default=None,
         description="Why the student thinks the grade was wrong. Optional — requiring prose "
         "behind the button would suppress the disagreements this exists to collect",
+    )
+    # The three below were added for the feedback loop
+    # (docs/specs/2026-10-11-override-feedback-loop-design.md §3) and are None on every
+    # override written before them — "not recorded", which is a different fact from `[]`.
+    required_points: list[str] | None = Field(
+        default=None,
+        description="The bar the evaluator actually graded against. `expected_answer_notes` "
+        "is only the model answer it interprets the points with, so without this a misgrade "
+        "cannot be reproduced. `[]` means the evaluator chose its own points (a diagnostic "
+        "probe, or a question written before points existed)",
+    )
+    evaluator_model: str | None = Field(
+        default=None, description="The model that produced the disputed grade"
+    )
+    question_kind: Literal["pipeline1", "diagnostic"] | None = Field(
+        default=None,
+        description="Which pipeline wrote the question — question_generator or the "
+        "diagnoser — which decides which component a misgrade can blame",
     )
     created_at: datetime = Field(default_factory=_now)
 

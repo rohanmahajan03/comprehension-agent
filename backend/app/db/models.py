@@ -159,6 +159,14 @@ class AnswerOverrideRow(Base):
     # Nullable: the note is optional, because requiring prose behind the button would
     # suppress the disagreements this table exists to collect.
     student_note: Mapped[str | None]
+    # Nullable because every row written before these columns has no value for them, and
+    # "not recorded" must stay distinguishable from `[]` (the evaluator chose its own
+    # points). See docs/specs/2026-10-11-override-feedback-loop-design.md §3.
+    # none_as_null: otherwise SQLAlchemy writes None as the JSON value `null`, and a
+    # pre-migration row (SQL NULL) and a new unrecorded one would differ in psql.
+    required_points: Mapped[list[str] | None] = mapped_column(JSONB(none_as_null=True))
+    evaluator_model: Mapped[str | None]
+    question_kind: Mapped[str | None]
     # Written by PostgresStore on insert (like StudySessionRow's timestamps, unlike
     # DocumentRow.created_at) so the value matches what InMemoryStore produces.
     created_at: Mapped[datetime] = mapped_column(

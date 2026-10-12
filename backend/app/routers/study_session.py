@@ -9,6 +9,7 @@ from app.models import (
     Answer,
     AnswerOverride,
     has_pipeline_one_question,
+    is_diagnostic_question_id,
     DependencyGraph,
     DiagnosisResult,
     DocumentStatus,
@@ -363,6 +364,16 @@ def override_answer(
             student_answer=entry.answer.text,
             evaluator_explanation=entry.evaluation.explanation,
             student_note=payload.note,
+            # The rubric the grade came from, not just the model answer beside it — see
+            # docs/specs/2026-10-11-override-feedback-loop-design.md §3. The model is the
+            # one this process grades with, which is the one that graded this entry: an
+            # override can only target the newest answer, so no deploy sits between them
+            # except in the rare restart-mid-session case.
+            required_points=list(entry.question.required_points),
+            evaluator_model=evaluator.MODEL,
+            question_kind=(
+                "diagnostic" if is_diagnostic_question_id(entry.question.id) else "pipeline1"
+            ),
         )
     )
     if not wrote:

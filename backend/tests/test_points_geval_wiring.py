@@ -71,11 +71,13 @@ def test_grading_path_runs_end_to_end(monkeypatch: pytest.MonkeyPatch) -> None:
         lambda: SimpleNamespace(messages=SimpleNamespace(create=fake_evaluate)),
     )
     support.generate_points.cache_clear()
+    support.write_points.cache_clear()
     support.grade.cache_clear()
     try:
         result = support.grade("test_ch1_fault_vs_failure_clearly_correct")
     finally:
         support.generate_points.cache_clear()
+        support.write_points.cache_clear()
         support.grade.cache_clear()
 
     assert result.correct is True

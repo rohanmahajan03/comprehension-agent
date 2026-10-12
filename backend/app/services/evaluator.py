@@ -8,7 +8,9 @@ import anthropic
 from app.config import get_settings
 from app.models import Answer, EvaluationResult, Question
 
-_MODEL = "claude-haiku-4-5"
+# Public because the override endpoint snapshots it: a disputed grade has to say which model
+# produced it, or a later model's grade on the same answer gets compared against it blind.
+MODEL = "claude-haiku-4-5"
 
 _SYSTEM_PROMPT = """You are an answer evaluator for an adaptive tutoring system.
 
@@ -76,7 +78,7 @@ def evaluate(question: Question, answer: Answer) -> EvaluationResult:
         f"STUDENT ANSWER:\n{answer.text}"
     )
     response = _client().messages.create(
-        model=_MODEL,
+        model=MODEL,
         max_tokens=1024,
         temperature=0,
         system=_SYSTEM_PROMPT,

@@ -763,6 +763,37 @@ def test_answer_override_round_trips(store: PostgresStore) -> None:
     assert next(o for o in overrides if o.history_seq == 1).student_note is None
 
 
+def test_answer_override_grading_snapshot_round_trips(store: PostgresStore) -> None:
+    """The rubric, model and question kind survive the write — and `[]` stays distinct
+    from NULL. `[]` says the evaluator chose its own points; NULL says nobody recorded
+    them (every row older than the columns). Collapsing the two would make a pre-migration
+    override look reproducible when it isn't
+    (docs/specs/2026-10-11-override-feedback-loop-design.md §3)."""
+    points = ["A limit is the value a function approaches.", "It need not equal f(a)."]
+    store.save_answer_override(
+        _override(
+            history_seq=0,
+            required_points=points,
+            evaluator_model="claude-haiku-4-5",
+            question_kind="pipeline1",
+        )
+    )
+    store.save_answer_override(
+        _override(history_seq=1, required_points=[], question_kind="diagnostic")
+    )
+    store.save_answer_override(_override(history_seq=2))
+
+    by_seq = {o.history_seq: o for o in store.list_answer_overrides()}
+    assert by_seq[0].required_points == points
+    assert by_seq[0].evaluator_model == "claude-haiku-4-5"
+    assert by_seq[0].question_kind == "pipeline1"
+    assert by_seq[1].required_points == []
+    assert by_seq[1].question_kind == "diagnostic"
+    assert by_seq[2].required_points is None
+    assert by_seq[2].evaluator_model is None
+    assert by_seq[2].question_kind is None
+
+
 def test_saving_the_same_history_entry_twice_returns_false_and_writes_once(
     store: PostgresStore,
 ) -> None:
