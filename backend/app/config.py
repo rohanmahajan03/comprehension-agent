@@ -13,6 +13,12 @@ class Settings(BaseSettings):
     # Empty = InMemoryStore (tests, and any environment without a real database).
     # Set = PostgresStore. See app/store/__init__.py's get_store().
     database_url: str = ""
+    # "Done studying for now" commits a session summary to this GitHub repo (owner/name)
+    # via the contents API. Empty token = the button reports the journal as unconfigured.
+    # See app/services/study_journal.py.
+    journal_github_token: str = ""
+    journal_repo: str = "rohanmahajan03/comprehension-in-action"
+    journal_branch: str = "main"
 
     @property
     def cors_origin_list(self) -> list[str]:

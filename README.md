@@ -96,7 +96,7 @@ npm run dev                      # serves on :5173, proxies /api to :8000
 
 ```bash
 cd backend
-.venv/bin/pytest                 # or just `pytest` with the venv activated
+.venv/bin/python -m pytest       # or `python -m pytest` with the venv activated
 ```
 
 Free and deterministic — all five LLM services are stubbed for these via autouse fixtures in `tests/conftest.py` (the graph_builder stub returns a fixed 5-concept calculus graph; the question_generator stub returns two templated questions per concept; the diagnoser stub picks the concept's first prerequisite, falling back to the concept itself when it has none; the evidence_finder stub only finds sentences that name the concept).
@@ -117,8 +117,8 @@ To run any of them:
 ```bash
 cd backend
 set -a && source ../.env && set +a
-.venv/bin/pytest tests/eval_geval -v            # or tests/points_geval, tests/graph_geval, tests/question_geval, tests/diagnoser_geval, tests/evidence_geval
-.venv/bin/pytest tests/points_geval/test_judge_calibration.py -k "not generated" -v   # points judge calibration alone (~29 Opus calls)
+.venv/bin/python -m pytest tests/eval_geval -v            # or tests/points_geval, tests/graph_geval, tests/question_geval, tests/diagnoser_geval, tests/evidence_geval
+.venv/bin/python -m pytest tests/points_geval/test_judge_calibration.py -k "not generated" -v   # points judge calibration alone (~29 Opus calls)
 ```
 
 ## Running frontend tests

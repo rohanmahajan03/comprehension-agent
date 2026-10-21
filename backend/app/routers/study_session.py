@@ -22,7 +22,7 @@ from app.models import (
     StudySessionSummary,
     StudySessionSummaryRow,
 )
-from app.services import diagnoser, evaluator
+from app.services import diagnoser, evaluator, study_journal
 from app.services.graph_builder import topological_order
 from app.store import Store, get_store
 
@@ -180,6 +180,57 @@ def delete_study_session(study_session_id: str) -> None:
     if store.get_study_session(study_session_id) is None:
         raise HTTPException(status_code=404, detail=f"No study session '{study_session_id}'")
     store.delete_study_session(study_session_id)
+
+
+class JournalResponse(BaseModel):
+    path: str
+    file_url: str
+    commit_url: str
+    markdown: str
+
+
+@router.post("/{study_session_id}/journal", response_model=JournalResponse)
+def save_to_journal(study_session_id: str) -> JournalResponse:
+    """The "Done studying for now" button: commit this session's summary to the journal repo.
+
+    Leaves the session exactly as it is — it stays resumable, and pressing the button again
+    later overwrites the same file with the fuller summary (see app/services/study_journal.py).
+    """
+    store = get_store()
+    study_session = store.get_study_session(study_session_id)
+    if study_session is None:
+        raise HTTPException(status_code=404, detail=f"No study session '{study_session_id}'")
+    if not study_session.history:
+        raise HTTPException(
+            status_code=409, detail="Answer at least one question before saving a summary"
+        )
+    graph = store.get_graph(study_session.doc_id)
+    if graph is None:
+        raise HTTPException(
+            status_code=404, detail=f"No graph found for doc '{study_session.doc_id}'"
+        )
+    title = next(
+        (d.title for d in store.list_documents() if d.id == study_session.doc_id), None
+    )
+
+    markdown = study_journal.summarize(study_session, graph, title)
+    try:
+        result = study_journal.publish(
+            study_journal.journal_path(study_session, title),
+            markdown,
+            study_journal.commit_message(study_session, title),
+        )
+    except study_journal.JournalNotConfigured as err:
+        raise HTTPException(status_code=503, detail=str(err)) from err
+    except study_journal.JournalPublishError as err:
+        raise HTTPException(status_code=502, detail=str(err)) from err
+
+    return JournalResponse(
+        path=result.path,
+        file_url=result.file_url,
+        commit_url=result.commit_url,
+        markdown=markdown,
+    )
 
 
 def _pending_question(store: Store, study_session: StudySession) -> Question | None:

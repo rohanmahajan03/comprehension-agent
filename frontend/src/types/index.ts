@@ -157,6 +157,15 @@ export interface AnswerResponse {
 // misgraded their last answer; the response is a StudySessionDetail carrying the advanced
 // session. `note` is optional — requiring prose behind the button would suppress the
 // disagreements the feature exists to collect.
+// "Done studying for now": the session summary as committed to the journal repo.
+// Mirrors `JournalResponse` in backend/app/routers/study_session.py.
+export interface JournalResponse {
+  path: string
+  file_url: string
+  commit_url: string
+  markdown: string
+}
+
 export interface AnswerOverrideRequest {
   question_id: string
   note: string | null

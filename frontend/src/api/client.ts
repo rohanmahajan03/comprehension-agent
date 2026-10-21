@@ -6,6 +6,7 @@ import type {
   DependencyGraph,
   DocumentSummary,
   EvidenceProposal,
+  JournalResponse,
   Question,
   StudySessionDetail,
   StudySessionSummary,
@@ -89,6 +90,14 @@ export function overrideAnswer(
   return request(`/api/study-session/${encodeURIComponent(studySessionId)}/override`, {
     method: 'POST',
     body: JSON.stringify(body),
+  })
+}
+
+// Commits a markdown summary of the session to the journal repo on GitHub. The session
+// itself is untouched; saving again later overwrites the same file in a new commit.
+export function saveToJournal(studySessionId: string): Promise<JournalResponse> {
+  return request(`/api/study-session/${encodeURIComponent(studySessionId)}/journal`, {
+    method: 'POST',
   })
 }
 

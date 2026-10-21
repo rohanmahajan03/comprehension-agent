@@ -3,6 +3,7 @@ import {
   getGraph,
   getStudySession,
   overrideAnswer,
+  saveToJournal,
   startStudySession,
   submitAnswer,
 } from "../api/client";
@@ -23,6 +24,7 @@ import type {
   AnswerResponse,
   Concept,
   DependencyGraph,
+  JournalResponse,
   Question,
   StudySession,
   StudySessionDetail,
@@ -55,6 +57,9 @@ export function StudySessionPage({ docId, sessionId, onExit }: Props) {
   const [overriding, setOverriding] = useState(false);
   const [overrideNote, setOverrideNote] = useState("");
   const [selected, setSelected] = useState<Concept | null>(null);
+  // "Done studying for now": the last commit made to the journal repo, if any.
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState<JournalResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   // Caches the in-flight `startStudySession` call per docId so React StrictMode's dev-mode
   // double-invoke of the mount effect below reuses the one POST instead of firing a second.
@@ -187,6 +192,19 @@ export function StudySessionPage({ docId, sessionId, onExit }: Props) {
     }
   };
 
+  const handleDoneStudying = async () => {
+    if (!studySession) return;
+    setSaving(true);
+    setError(null);
+    try {
+      setSaved(await saveToJournal(studySession.id));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSaving(false);
+    }
+  };
+
   if (error && !studySession) return <p className="error">{error}</p>;
   if (!studySession)
     return (
@@ -198,8 +216,35 @@ export function StudySessionPage({ docId, sessionId, onExit }: Props) {
       <div className="card">
         <div className="card-header">
           <h2>Tutoring session</h2>
-          <button onClick={onExit}>Back to Home</button>
+          <div className="card-header-actions">
+            {/* Commits a summary of this session to the journal repo. The session stays
+                resumable; saving again later overwrites the same file in a new commit. */}
+            <button
+              onClick={handleDoneStudying}
+              disabled={saving || submitting || studySession.history.length === 0}
+              title={
+                studySession.history.length === 0
+                  ? "Answer a question first"
+                  : "Commit a summary of this session to comprehension-in-action"
+              }
+            >
+              {saving ? "Saving…" : "Done studying for now"}
+            </button>
+            <button onClick={onExit}>Back to Home</button>
+          </div>
         </div>
+        {saved && (
+          <p className="journal-saved">
+            Summary committed to <code>{saved.path}</code> ·{" "}
+            <a href={saved.file_url} target="_blank" rel="noreferrer">
+              view summary
+            </a>{" "}
+            ·{" "}
+            <a href={saved.commit_url} target="_blank" rel="noreferrer">
+              view commit
+            </a>
+          </p>
+        )}
         <p>
           Status:{" "}
           {/* No dedicated "active" style — active reuses the "correct" (positive/green)

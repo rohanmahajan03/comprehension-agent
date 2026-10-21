@@ -127,6 +127,18 @@ button:disabled {
   margin: 0;
 }
 
+.card-header-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+
+.journal-saved {
+  margin: 0.75rem 0 0;
+  font-size: 0.9rem;
+}
+
 .error {
   color: #b3261e;
 }

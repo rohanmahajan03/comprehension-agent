@@ -25,9 +25,13 @@ docker compose up -d postgres
 cd backend && set -a && source ../.env && set +a && .venv/bin/alembic upgrade head
 cd backend && set -a && source ../.env && set +a && .venv/bin/alembic revision --autogenerate -m "..."
 
+# `python -m pytest`, not `.venv/bin/pytest`: on macOS the editable install's .pth file can
+# carry the `hidden` flag, which Python 3.13 skips, so `app` isn't importable from the bare
+# entry point. `-m` puts the cwd (backend/) on sys.path, so it works either way. To repair the
+# venv instead: chflags nohidden .venv/lib/python3.13/site-packages/*.pth
 # Backend tests (free — all five services are stubbed via tests/conftest.py, live geval
 # suites and test_postgres_store.py auto-skip)
-cd backend && .venv/bin/pytest
+cd backend && .venv/bin/python -m pytest
 
 # PostgresStore regression suite (real Postgres, no LLM calls — see Testing below).
 # ⚠️ DESTRUCTIVE: truncates all six tables before every test. It reads TEST_DATABASE_URL,
@@ -36,28 +40,28 @@ cd backend && .venv/bin/pytest
 docker compose up -d postgres
 export TEST_DATABASE_URL=postgresql+psycopg://comprehension_agent:devpassword@localhost:5433/comprehension_agent_test
 cd backend && DATABASE_URL=$TEST_DATABASE_URL .venv/bin/alembic upgrade head   # once, to create the schema
-cd backend && .venv/bin/pytest tests/test_postgres_store.py -v
+cd backend && .venv/bin/python -m pytest tests/test_postgres_store.py -v
 
 # G-Eval regression suite for evaluator.py (real, billed Anthropic API calls — see Testing below)
-cd backend && set -a && source ../.env && set +a && .venv/bin/pytest tests/eval_geval -v
+cd backend && set -a && source ../.env && set +a && .venv/bin/python -m pytest tests/eval_geval -v
 
 # Required-points suite: generated points vs. ruled verdicts (real, billed — cheap, no judge model)
-cd backend && set -a && source ../.env && set +a && .venv/bin/pytest tests/points_geval -v
+cd backend && set -a && source ../.env && set +a && .venv/bin/python -m pytest tests/points_geval -v
 
 # Points judge calibration only (real, billed — ~29 Opus calls, no generation or grading)
-cd backend && set -a && source ../.env && set +a && .venv/bin/pytest tests/points_geval/test_judge_calibration.py -k "not generated" -v
+cd backend && set -a && source ../.env && set +a && .venv/bin/python -m pytest tests/points_geval/test_judge_calibration.py -k "not generated" -v
 
 # Structural regression suite for graph_builder.py (real, billed Anthropic API calls — see Testing below)
-cd backend && set -a && source ../.env && set +a && .venv/bin/pytest tests/graph_geval -v
+cd backend && set -a && source ../.env && set +a && .venv/bin/python -m pytest tests/graph_geval -v
 
 # Regression suite for question_generator.py (real, billed Anthropic API calls — see Testing below)
-cd backend && set -a && source ../.env && set +a && .venv/bin/pytest tests/question_geval -v
+cd backend && set -a && source ../.env && set +a && .venv/bin/python -m pytest tests/question_geval -v
 
 # Regression suite for diagnoser.py (real, billed Anthropic API calls — see Testing below)
-cd backend && set -a && source ../.env && set +a && .venv/bin/pytest tests/diagnoser_geval -v
+cd backend && set -a && source ../.env && set +a && .venv/bin/python -m pytest tests/diagnoser_geval -v
 
 # Regression suite for evidence_finder.py (real, billed — the cheapest of the five, Haiku only)
-cd backend && set -a && source ../.env && set +a && .venv/bin/pytest tests/evidence_geval -v
+cd backend && set -a && source ../.env && set +a && .venv/bin/python -m pytest tests/evidence_geval -v
 
 # Override feedback loop (docs/specs/2026-10-11-override-feedback-loop-design.md).
 # Triage needs DATABASE_URL (it reads answer_overrides); review/promote make no API calls.
@@ -66,7 +70,7 @@ cd backend && set -a && source ../.env && set +a && \
   .venv/bin/python -m tests.override_corpus.triage propose   # then: review, promote, judges
 # Regression suite over promoted cases + triage calibration (real, billed — ~13 Opus calls
 # plus a Haiku call per case). OVERRIDE_GEVAL_SEEDS=1 adds 13 synthetic cases.
-cd backend && set -a && source ../.env && set +a && .venv/bin/pytest tests/override_geval -v
+cd backend && set -a && source ../.env && set +a && .venv/bin/python -m pytest tests/override_geval -v
 
 # Its probe: one concept end to end, or judge calibration (a few calls, seconds)
 cd backend && set -a && source ../.env && set +a && \
@@ -130,6 +134,7 @@ Key seams:
   - The PATCH **re-checks every quote against the chapter** (`text_match.is_verbatim`) and 422s otherwise. `evidence_finder` is not the only way into the field, and a reviewer "fixing" a typo in a proposed quote turns provenance back into prose — the invariant holds at the write, so everything downstream can treat `source_quotes` as chapter text without re-checking.
   - **`found: false` is a first-class outcome with a user-facing notice.** A chapter often assumes a concept rather than teaching it, which is a legitimate reason to have added it, so `ReviewGraphPage` says *"Could not find evidence for this concept in the chapter"*, names the consequence (its questions come from the summary alone) and both valid responses. It's transient component state, not stored: an empty `source_quotes` can't distinguish "we looked and found nothing" from "nobody has looked". When quotes were dropped as non-verbatim the notice says so, separating "the chapter doesn't cover this" from "the model paraphrased everything".
   - **Not yet measured (DEFERRED) — nobody has shown a concept with `source_quotes` gets better questions than one without.** That is a separate question from "does the scan work", which `tests/evidence_geval` now answers. The follow-on spec sequences it: a premise probe first (~8 calls, seconds — does more target evidence reduce drift at all?), then a full `question_geval` A/B, and only then the generalization to extracted concepts. That last step is expected to go via a **second pass calling `evidence_finder` per concept after `build_graph()`**, not by extending `graph_builder`'s prompt/schema — which leaves `graph_geval` unable to regress and reuses code that is already live-verified. The spec also flags the trap in measuring this: `question_geval`'s `_target_focus_context()` folds every `target_concept`-role passage into the judge's "target" blob, so check 6 could improve without any question improving.
+- **Study journal (`POST /api/study-session/{id}/journal`)**: the "Done studying for now" button on `StudySessionPage`. `app/services/study_journal.py` builds a markdown summary from the session's history alone (no LLM call) — topics studied in prerequisite order, strong / recovered / still-shaky by the same last-outcome-wins rule and `effective_correct` the graph colouring uses, the evaluator's explanation for each still-open miss, and gaps the diagnoser traced to a different concept — then commits it to `JOURNAL_REPO` through GitHub's contents API (stdlib `urllib`, one commit per call). One file per session (`sessions/{started}-{chapter-slug}-{session_id}.md`), overwritten on each press, so studying one session over several sittings is one file with several commits. The session itself is untouched and stays resumable. No `JOURNAL_GITHUB_TOKEN` → 503; GitHub failure → 502; no answers yet → 409. `tests/test_study_journal.py` covers it with the HTTP helper faked.
 - Concept ordering uses `graphlib.TopologicalSorter` (`graph_builder.topological_order`).
 
 ## Stub behavior (intentional, don't "fix")

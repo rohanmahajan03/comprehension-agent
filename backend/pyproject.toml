@@ -21,6 +21,9 @@ dependencies = [
     "sqlalchemy>=2.0,<3.0",
     "alembic>=1.13,<2.0",
     "psycopg[binary]>=3.1,<4.0",
+    # CA bundle for the study journal's GitHub calls (stdlib urllib) — python.org's macOS
+    # Python has no system certificates. Already in uv.lock via anthropic/httpx.
+    "certifi>=2024.2.2",
 ]
 
 [project.optional-dependencies]
